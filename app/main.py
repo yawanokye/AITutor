@@ -29,7 +29,7 @@ logger = logging.getLogger("ai_tutor")
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title=settings.app_name, version="1.0.0")
+app = FastAPI(title=settings.app_name, version="1.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 knowledge = KnowledgeStore(database_url=settings.database_url, storage_dir=settings.storage_dir)
@@ -43,14 +43,24 @@ sessions: dict[str, deque[dict[str, Any]]] = defaultdict(
 rate_buckets: dict[str, deque[float]] = defaultdict(deque)
 
 SUPPORTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
-SUPPORTED_AUDIO_TYPES = {
-    "audio/webm",
-    "audio/wav",
-    "audio/x-wav",
-    "audio/mpeg",
-    "audio/mp4",
-    "audio/ogg",
-    "video/webm",  # MediaRecorder may label audio-only WebM this way.
+SUPPORTED_AUDIO_MIME_TO_EXTENSION = {
+    "audio/webm": ".webm",
+    "video/webm": ".webm",  # Some browsers label audio-only WebM this way.
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/wave": ".wav",
+    "audio/vnd.wave": ".wav",
+    "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3",
+    "audio/mp4": ".m4a",
+    "video/mp4": ".mp4",
+    "audio/ogg": ".ogg",
+    "application/ogg": ".ogg",
+    "audio/aac": ".aac",
+    "audio/flac": ".flac",
+}
+SUPPORTED_AUDIO_EXTENSIONS = {
+    ".webm", ".wav", ".mp3", ".mp4", ".m4a", ".mpeg", ".mpga", ".ogg", ".aac", ".flac"
 }
 VOICE_OPTIONS = ["alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"]
 
@@ -79,6 +89,30 @@ def _require_openai():
 def _safe_filename(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._ -]+", "_", Path(name).name).strip()
     return cleaned[:180] or "material"
+
+
+def _base_media_type(content_type: str | None) -> str:
+    """Return a lowercase MIME type without parameters such as codecs."""
+    return (content_type or "").split(";", 1)[0].strip().lower()
+
+
+def _audio_upload_extension(filename: str | None, content_type: str | None) -> str | None:
+    """Resolve a safe extension from a parameterised MIME type or file name."""
+    base_type = _base_media_type(content_type)
+    mime_extension = SUPPORTED_AUDIO_MIME_TO_EXTENSION.get(base_type)
+    if mime_extension:
+        return mime_extension
+
+    filename_extension = Path(filename or "").suffix.lower()
+    if filename_extension in SUPPORTED_AUDIO_EXTENSIONS:
+        return filename_extension
+
+    # Browsers and proxies sometimes replace a valid audio MIME type with a
+    # generic binary type. In that case, the recognised filename extension is
+    # the only reliable signal available to the application.
+    if base_type in {"", "application/octet-stream"} and filename_extension:
+        return filename_extension if filename_extension in SUPPORTED_AUDIO_EXTENSIONS else None
+    return None
 
 
 def _course_context(query: str) -> tuple[str, list[str]]:
@@ -315,8 +349,17 @@ async def chat(
 async def transcribe(request: Request, audio: UploadFile = File(...)) -> dict[str, str]:
     _check_rate_limit(request)
     openai_client = _require_openai()
-    if audio.content_type not in SUPPORTED_AUDIO_TYPES:
-        raise HTTPException(status_code=415, detail="Unsupported audio format. Use WebM, WAV, MP3, MP4 or OGG.")
+    extension = _audio_upload_extension(audio.filename, audio.content_type)
+    if extension is None:
+        logger.warning(
+            "Rejected audio upload: filename=%r content_type=%r",
+            audio.filename,
+            audio.content_type,
+        )
+        raise HTTPException(
+            status_code=415,
+            detail="Unsupported audio format. Use WebM, WAV, MP3, MP4, M4A, OGG, AAC or FLAC.",
+        )
     data = await audio.read()
     if not data:
         raise HTTPException(status_code=422, detail="The recording is empty.")
@@ -324,7 +367,10 @@ async def transcribe(request: Request, audio: UploadFile = File(...)) -> dict[st
         raise HTTPException(status_code=413, detail=f"Audio must be no larger than {settings.max_audio_mb} MB.")
 
     buffer = io.BytesIO(data)
-    buffer.name = _safe_filename(audio.filename or "recording.webm")
+    safe_stem = Path(_safe_filename(audio.filename or "recording")).stem or "recording"
+    # Give the transcription service a filename that matches the actual MIME
+    # container. This matters on browsers that record MP4/M4A rather than WebM.
+    buffer.name = f"{safe_stem}{extension}"
 
     def create_transcription():
         return openai_client.audio.transcriptions.create(
