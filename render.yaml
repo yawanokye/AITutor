@@ -12,9 +12,35 @@ services:
         value: 3.12.8
       - key: APP_NAME
         value: Anovlad AI Tutor
+      - key: PUBLIC_APP_URL
+        value: https://anovlad-ai-tutor.onrender.com
+
+      - key: AI_PROVIDER
+        value: deepseek
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: DEEPSEEK_BASE_URL
+        value: https://api.deepseek.com
+      - key: DEEPSEEK_MODEL
+        value: deepseek-v4-flash
+      - key: DEEPSEEK_ADVANCED_MODEL
+        value: deepseek-v4-pro
+      - key: DEEPSEEK_THINKING
+        value: false
+      - key: DEEPSEEK_ADVANCED_THINKING
+        value: false
+      - key: ADVANCED_ROUTING_ENABLED
+        value: true
+      - key: ADVANCED_ROUTING_MIN_SCORE
+        value: 4
+      - key: DEEPSEEK_MAX_TOKENS
+        value: 6000
+
       - key: OPENAI_API_KEY
         sync: false
       - key: AI_MODEL
+        value: gpt-5.6-luna
+      - key: VISION_MODEL
         value: gpt-5.6-luna
       - key: AI_REASONING_EFFORT
         value: low
@@ -34,15 +60,50 @@ services:
         value: gpt-4o-mini-tts
       - key: DEFAULT_VOICE
         value: nova
+
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: ACCESS_TOKEN_MINUTES
+        value: 1440
+      - key: TEACHER_INVITE_CODE
+        sync: false
+      - key: ALLOW_STUDENT_REGISTRATION
+        value: true
+      - key: REQUIRE_LOGIN_FOR_AI
+        value: true
+      - key: STUDENT_MONTHLY_AI_BUDGET_USD
+        value: 1.00
+      - key: ADMIN_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+
+      - key: TAVUS_API_KEY
+        sync: false
+      - key: TAVUS_VIDEO_REPLICA_ID
+        sync: false
+      - key: STUDENT_VIDEO_MONTHLY_LIMIT
+        value: 0
+      - key: TEACHER_VIDEO_MONTHLY_LIMIT
+        value: 20
+      - key: LIVE_VIDEO_ENABLED
+        value: false
+      - key: LESSON_VIDEO_ENABLED
+        value: true
+
+      - key: INSTITUTIONAL_MODE
+        value: true
+      - key: COURSE_LOCK_ENABLED
+        value: true
+      - key: LOW_BANDWIDTH_ENABLED
+        value: true
+      - key: LOW_DATA_MAX_TOKENS
+        value: 1800
+      - key: TEXT_ONLY_MAX_TOKENS
+        value: 1200
       - key: DEMO_MODE
         value: false
       - key: ALLOW_GENERAL_KNOWLEDGE
-        value: true
-      - key: ADMIN_KEY
-        generateValue: true
-      # Paste the Internal Database URL of your existing Render Postgres database.
-      # This Blueprint deliberately does not create another database.
-      - key: DATABASE_URL
-        sync: false
+        value: false
       - key: RATE_LIMIT_PER_MINUTE
         value: 30

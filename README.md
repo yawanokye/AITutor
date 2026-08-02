@@ -1,237 +1,279 @@
-# Anovlad AI Tutor v2.1
+# Anovlad Institutional AI Tutor v4.0
 
-A Render-ready multimodal tutoring application with text, voice, image understanding, course-material grounding, an interactive visual whiteboard, guided practice and AI feedback on learner working.
+A Render-ready, course-controlled AI learning system for large student populations. Version 4.0 removes one-to-one live avatar video from normal student use and concentrates spending on text tutoring, voice, image analysis, visual explanations, guided practice and reusable class lessons.
 
-## What v2.1 adds
+## What makes v4.0 different
 
-### Guided practice and assessment
+### 1. Course-locked tutoring
 
-- generates two to six questions for a selected topic,
-- moves from foundation to standard and challenge questions,
-- accepts typed answers or whiteboard working,
-- marks equivalent wording and valid alternative methods,
-- provides a focused hint after an unsuccessful attempt,
-- reveals a worked solution when requested,
-- tracks progress and the current activity score.
+Each class has a teacher-controlled knowledge setting:
 
-### Whiteboard work checking
+- **Course materials only**: answers are restricted to uploaded official materials.
+- **Course materials plus approved sources**: the tutor may also use teacher-approved external readings.
+- **General knowledge**: available only when the teacher deliberately enables it.
 
-Learners can write, calculate, label or highlight on the board, then select **Check my work**. The tutor evaluates the method and result, identifies strengths and corrections, recommends the next step, and can place colour-coded annotations over the submitted board image.
+Materials can be uploaded globally by an administrator or directly into a teacher's class. Class materials are isolated from other classes.
 
-### Synchronised visual teaching
+### 2. Outcome-based teaching
 
-The **Teach step by step** control presents one visual step at a time and speaks the matching narration. Learners can pause, stop, move between steps, replay an explanation and continue at their own pace.
+Teachers define:
 
-### Editable visuals
+- Course learning outcomes
+- Weekly topics
+- Course-specific tutor instructions
+- The permitted knowledge mode
 
-- graph and table values can be edited as CSV,
-- diagram nodes can be dragged to improve the layout,
-- uploaded-image annotations distinguish information, correct work, cautions and errors,
-- learner pen strokes are preserved with undo, redo and clear controls.
+Students select the relevant outcome and weekly topic before asking a question. Tutoring, practice, whiteboard checks and dashboard evidence are then connected to that learning context.
 
-### Automatic workspace recovery
+### 3. Step-level whiteboard assessment
 
-The browser saves the current conversation, visual plan, learner ink and interface settings locally. Reopening or refreshing the page restores the latest workspace on that browser.
+Students can write with a mouse, stylus or finger, or upload a photograph of handwritten work. The tutor can:
 
-## Visual whiteboard capabilities
+- Review steps in their original order
+- Mark each step as correct, warning, error or unreadable
+- Identify the first incorrect step
+- Highlight relevant regions on the image
+- Explain the misconception
+- Suggest the next action without immediately replacing the learner's work
+- Record the result against the selected learning outcome
 
-The tutor can display:
+### 4. Teacher intelligence dashboard
 
-- step-by-step mathematics and statistical workings,
-- equations rendered with MathJax,
-- line graphs with labelled axes and multiple series,
-- comparison and calculation tables,
-- labelled concept and process diagrams,
-- highlighted regions on an uploaded image,
-- short lesson-slide presentations,
-- a live board with pen, highlighter and eraser tools,
-- full-screen presentation and PNG export,
-- a board snapshot attached to the learner's next question.
+The teacher dashboard includes:
 
-## Other capabilities retained
+- Student activity and average scores
+- Weak topics
+- Outcome mastery evidence
+- Common misconceptions
+- Students requiring intervention
+- Frequently asked questions
+- Questions the course-locked tutor could not answer from approved materials
+- Provider, model, token and estimated cost summaries
+- Course-profile editing and class join codes
 
-- text questions and multi-turn chat,
-- browser microphone recording,
-- speech-to-text transcription,
-- spoken answers with selectable voices,
-- image questions from photographs, screenshots and uploads,
-- animated tutor while speech is playing,
-- PDF, DOCX, TXT, MD and CSV course-material uploads,
-- retrieval of relevant approved course extracts,
-- source labels in tutor answers,
-- guided, direct, revision and examination-practice modes,
-- PostgreSQL storage on Render,
-- local JSON fallback when PostgreSQL is absent,
-- administrator-protected material uploads,
-- responsive desktop and mobile views,
-- demonstration mode without API calls.
+### 5. Low-bandwidth learning
 
-## Architecture
+Students can choose:
 
-```text
-Student browser
-  ├─ typed or recorded question
-  ├─ uploaded or photographed image
-  ├─ learner whiteboard working
-  └─ guided-practice answer
-            │
-            ▼
-FastAPI service on Render
-  ├─ course-material retrieval
-  ├─ multimodal tutoring response
-  ├─ structured visual-plan generation
-  ├─ practice generation and marking
-  ├─ whiteboard image evaluation
-  └─ transcription and speech generation
-            │
-            ▼
-Written answer + audio + visual lesson + feedback + score
-```
+- **Standard**: full text and visual explanations
+- **Low data**: shorter responses, reduced visual load and no automatic speech
+- **Text only**: compact answers without the whiteboard or voice
 
-The API key stays on the server and is never sent to the learner's browser.
+The app also provides:
+
+- A service-worker application shell for faster repeat visits
+- Browser recovery of the current workspace
+- Downloadable self-contained HTML lesson packs
+- Reusable class lesson scripts and slides
+- Optional shared MP4 generation for a whole class
+
+## AI provider routing
+
+The default cost-control strategy is:
+
+- **DeepSeek V4 Flash** for ordinary tutoring, practice, marking, whiteboard plans, dashboard-support tasks and lesson scripts
+- **DeepSeek V4 Pro** only when the complexity router detects advanced work
+- **OpenAI vision** for uploaded images, handwritten work, diagrams and screenshots
+- **OpenAI transcription** for spoken student questions
+- **OpenAI text-to-speech** for optional spoken answers
+
+The teacher dashboard records model usage and estimated text-generation costs.
+
+## Live video decision
+
+One-to-one Tavus live conversations are retired. The old endpoint returns HTTP 410 with a migration message. The app's animated tutor, text, audio and interactive whiteboard remain available without per-minute avatar charges.
+
+Teachers can create one reusable lesson package for a class. A package always includes a script and slides. Tavus MP4 generation is optional and is used only when `TAVUS_API_KEY` and `TAVUS_VIDEO_REPLICA_ID` are configured.
+
+## Main student features
+
+- Student registration and sign-in
+- Class joining through a code
+- Text and microphone questions
+- Spoken tutor responses
+- Image and camera input
+- Interactive whiteboard
+- Step-by-step explanations
+- Graphs, tables, diagrams and lesson slides
+- Guided practice with hints and marking
+- Step-level work checking
+- Learning-outcome and weekly-topic selection
+- Personal progress dashboard
+- Shared class lesson library
+- Low-data and text-only modes
+- Session recovery and downloadable lesson packs
+
+## Main teacher features
+
+- Teacher registration through a private invitation code
+- Class creation and join-code management
+- Course profile and knowledge-mode control
+- Official and approved-external material uploads
+- Student progress and intervention dashboard
+- Outcome mastery and misconception reports
+- Unanswered-question review
+- AI usage and estimated cost monitoring
+- Reusable lesson package generation
 
 ## Repository structure
 
 ```text
 app/
-  main.py             API routes, tutoring, practice and work checking
-  config.py           environment settings
-  knowledge.py        extraction, chunking and retrieval
-  prompts.py          tutor, visual, assessment and feedback instructions
-  schemas.py          typed API, visual and assessment models
+  accounts.py       Accounts, classes, progress, dashboards and lesson records
+  config.py         Environment configuration
+  knowledge.py      Scoped course-material storage and retrieval
+  main.py           FastAPI routes and orchestration
+  prompts.py        Institutional teaching and assessment instructions
+  providers.py      DeepSeek and OpenAI provider routing
+  schemas.py        Validated API and structured-output models
+  tavus.py          Optional reusable MP4 lesson generation
   static/
-    index.html         chat, practice and whiteboard interface
-    styles.css         responsive visual and assessment styling
-    app.js             core chat, audio, visual and drawing features
-    v2_1.js            practice, work checking, editing and recovery
-
+    index.html
+    styles.css
+    app.js
+    v2_1.js
+    portal.js
+    manifest.webmanifest
+    service-worker.js
 tests/
-  test_app.py          API and feature tests
-
-data/
-  sample-course-note.txt
-
-render.yaml            Render Blueprint using an existing database
+render.yaml
 requirements.txt
-.env.example
 ```
 
-## Upgrade the existing Render deployment
+## Render deployment
 
-1. Extract this ZIP or the smaller v2.1 patch.
-2. Upload the contents to the root of the existing `AITutor` GitHub repository and replace older files.
-3. Commit to the `main` branch.
-4. Open the existing `anovlad-ai-tutor` web service in Render.
-5. Confirm the environment values below.
+This version is designed to use the existing Render PostgreSQL database. It does not declare or create another database.
+
+1. Extract the package.
+2. Upload the contents to the root of the GitHub `AITutor` repository.
+3. Replace existing files and commit to `main`.
+4. In Render, open `anovlad-ai-tutor`.
+5. Add or confirm the variables below.
 6. Select **Manual Deploy**, then **Clear build cache and deploy**.
-7. Wait until the service becomes **Live**.
-8. Refresh the tutor with `Ctrl + Shift + R`.
+7. After the service becomes Live, open `/health`.
 
-No database migration is required. The default `render.yaml` creates only the web service and uses your existing Render PostgreSQL database.
+Expected health fields include:
 
-## Render environment values
+```json
+{
+  "status": "ok",
+  "version": "4.0.0",
+  "live_video_enabled": false,
+  "institutional_mode": true,
+  "course_lock_enabled": true,
+  "low_bandwidth_enabled": true
+}
+```
+
+## Required Render variables
 
 ```text
-OPENAI_API_KEY=your-current-secret-key
+AI_PROVIDER=deepseek
+DEEPSEEK_API_KEY=your DeepSeek API key
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_ADVANCED_MODEL=deepseek-v4-pro
+DEEPSEEK_THINKING=false
+DEEPSEEK_ADVANCED_THINKING=false
+ADVANCED_ROUTING_ENABLED=true
+ADVANCED_ROUTING_MIN_SCORE=4
+DEEPSEEK_MAX_TOKENS=6000
+
+OPENAI_API_KEY=your OpenAI API key
 AI_MODEL=gpt-5.6-luna
-AI_REASONING_EFFORT=low
-AI_VERBOSITY=medium
-MAX_OUTPUT_TOKENS=6000
-VISUAL_PLAN_ENABLED=true
-VISUAL_MAX_OUTPUT_TOKENS=3500
-IMAGE_DETAIL=high
+VISION_MODEL=gpt-5.6-luna
 TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
 TTS_MODEL=gpt-4o-mini-tts
 DEFAULT_VOICE=nova
+
+AUTH_SECRET=a long random secret
+TEACHER_INVITE_CODE=a private teacher registration code
+ALLOW_STUDENT_REGISTRATION=true
+REQUIRE_LOGIN_FOR_AI=true
+STUDENT_MONTHLY_AI_BUDGET_USD=1.00
+ADMIN_KEY=a different long random secret
+DATABASE_URL=the Internal Database URL of the existing Render database
+
+INSTITUTIONAL_MODE=true
+COURSE_LOCK_ENABLED=true
+LOW_BANDWIDTH_ENABLED=true
+LOW_DATA_MAX_TOKENS=1800
+TEXT_ONLY_MAX_TOKENS=1200
+ALLOW_GENERAL_KNOWLEDGE=false
+LIVE_VIDEO_ENABLED=false
+LESSON_VIDEO_ENABLED=true
+STUDENT_VIDEO_MONTHLY_LIMIT=0
+TEACHER_VIDEO_MONTHLY_LIMIT=20
 DEMO_MODE=false
-DATABASE_URL=your-existing-Render-internal-database-URL
 ```
 
-Keep `OPENAI_API_KEY`, `DATABASE_URL` and `ADMIN_KEY` only in Render Environment settings. Never commit real secret values to GitHub.
+## Optional generated MP4 variables
 
-## How guided practice works
-
-1. The learner enters a topic and selects the number of questions.
-2. The backend grounds the activity in retrieved course extracts where available.
-3. The learner answers in text or writes on the board.
-4. The marking service compares the response with the expected answer and marking guide.
-5. A correct response advances to the next question. An incomplete response receives feedback and a hint.
-6. The learner may request the solution, which advances the activity without awarding the question score.
-
-Practice sessions are held in the running web service's memory. A Render restart can therefore end an unfinished practice activity. Persistent cross-device practice records require student accounts and database-backed activity storage in a later institutional release.
-
-## How whiteboard checking works
-
-The browser captures the current board as a PNG and sends it with the problem and visual context. The tutor returns a structured evaluation containing:
+Leave these blank when scripts and slides are sufficient:
 
 ```text
-verdict | score | summary | strengths | corrections | next step | annotations
+TAVUS_API_KEY=
+TAVUS_VIDEO_REPLICA_ID=
 ```
 
-Annotations use a normalised 1000 by 1000 coordinate system and are rendered over the captured board.
+No Tavus Persona ID, live Replica ID or live-minute setting is needed.
 
-## Mobile use
+## First institutional setup
 
-On smaller screens, use:
+1. Sign in as a teacher.
+2. Create a class.
+3. Open the dashboard and edit the course profile.
+4. Set the knowledge mode.
+5. Add learning outcomes and weekly topics, one per line.
+6. Add course-specific tutor instructions.
+7. Upload official course materials into that class.
+8. Share the class join code with students.
+9. Review unanswered questions and add missing approved materials where necessary.
 
-- **Conversation** for chat and guided practice,
-- **Whiteboard** for visuals, handwriting and work checking.
+## Existing database upgrade
 
-The Image control can open the phone camera when the browser supports camera capture.
+The app creates missing v4.0 columns and indexes during startup. Existing users, classes and learning events are retained. The new class fields include knowledge mode, learning outcomes, weekly topics and tutor instructions. Knowledge chunks gain class and material-type scope.
 
-## Course-material behaviour
+Back up the database before a production upgrade.
 
-Each uploaded document is checked, converted to text, divided into overlapping extracts, stored, and searched when a learner asks a question. The tutor receives the most relevant extracts and labels material used as `[Source: filename]`.
-
-Scanned image-only PDFs need OCR before upload because the current material uploader reads embedded document text.
-
-## Run locally
+## Local development
 
 ```bash
 python -m venv .venv
-```
-
-Activate the environment.
-
-Windows:
-
-```bash
-.venv\Scripts\activate
-```
-
-macOS or Linux:
-
-```bash
 source .venv/bin/activate
-```
-
-Install and configure:
-
-```bash
 pip install -r requirements.txt
 cp .env.example .env
-```
-
-Add the API key and set `DEMO_MODE=false`, then run:
-
-```bash
 uvicorn app.main:app --reload
 ```
 
-Open `http://localhost:8000`.
+On Windows PowerShell:
 
-## Testing
-
-```bash
-DEMO_MODE=true ADMIN_KEY=test-admin pytest -q
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env
+uvicorn app.main:app --reload
 ```
 
-The v2.1 package contains 15 automated tests covering health and configuration, visual responses, audio MIME compatibility, guided practice, solution reveal, work checking, image validation and administrator protection.
+## Validation
 
-## Scope of this release
+```bash
+python -m compileall -q app
+node --check app/static/app.js
+node --check app/static/v2_1.js
+node --check app/static/portal.js
+pytest -q
+```
 
-This release implements interactive teaching and assessment. It retains the lightweight animated tutor and spoken audio. It does not yet include student login, cross-device records, a teacher dashboard, a photorealistic WebRTC avatar or exported MP4 lesson videos.
+The supplied release passes 24 automated tests. External DeepSeek, OpenAI and Tavus calls require the institution's own API credentials and should be verified after deployment.
 
-## Production recommendations
+## Security and scale
 
-Before institution-wide use, add authenticated student and teacher accounts, enrolment controls, database-backed progress records, quotas, persistent conversation history, accessibility review, privacy notices, monitoring, backups and a paid Render service/database sized for the expected number of learners.
+- Keep all API keys in Render Environment, never in GitHub.
+- Keep `REQUIRE_LOGIN_FOR_AI=true` in production.
+- Use a paid Render PostgreSQL plan for a large institutional deployment.
+- Add email verification or institutional single sign-on before broad public registration.
+- Put rate limits and monthly budgets behind authenticated student identities.
+- Pilot with representative courses before enabling 30,000 accounts.
+- Review provider retention and institutional data-governance requirements before uploading sensitive student records.
