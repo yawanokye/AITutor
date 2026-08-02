@@ -100,7 +100,7 @@ class KnowledgeStore:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        CREATE TABLE IF NOT EXISTS knowledge_chunks (
+                        CREATE TABLE IF NOT EXISTS ai_tutor_knowledge_chunks (
                             id BIGSERIAL PRIMARY KEY,
                             source TEXT NOT NULL,
                             chunk_index INTEGER NOT NULL,
@@ -129,9 +129,9 @@ class KnowledgeStore:
         if self._use_postgres:
             with self._connect() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("DELETE FROM knowledge_chunks WHERE source = %s", (source,))
+                    cur.execute("DELETE FROM ai_tutor_knowledge_chunks WHERE source = %s", (source,))
                     cur.executemany(
-                        "INSERT INTO knowledge_chunks (source, chunk_index, content) VALUES (%s, %s, %s)",
+                        "INSERT INTO ai_tutor_knowledge_chunks (source, chunk_index, content) VALUES (%s, %s, %s)",
                         [(c.source, c.chunk_index, c.content) for c in new_chunks],
                     )
                 conn.commit()
@@ -147,7 +147,7 @@ class KnowledgeStore:
         if self._use_postgres:
             with self._connect() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT source, chunk_index, content FROM knowledge_chunks ORDER BY source, chunk_index")
+                    cur.execute("SELECT source, chunk_index, content FROM ai_tutor_knowledge_chunks ORDER BY source, chunk_index")
                     rows = cur.fetchall()
             return [Chunk(source=row[0], chunk_index=row[1], content=row[2]) for row in rows]
         with self._lock:
