@@ -6,7 +6,7 @@ os.environ.setdefault("DATABASE_URL", "")
 
 from fastapi.testclient import TestClient
 
-from app.main import _extract_response_text, app
+from app.main import _audio_upload_extension, _base_media_type, _extract_response_text, app
 
 
 client = TestClient(app)
@@ -64,3 +64,16 @@ def test_extract_response_text_from_message_items():
         output = [Item()]
 
     assert _extract_response_text(FakeResponse()) == "Visible answer"
+
+
+def test_parameterised_webm_mime_is_accepted():
+    assert _base_media_type("audio/webm;codecs=opus") == "audio/webm"
+    assert _audio_upload_extension("question.webm", "audio/webm;codecs=opus") == ".webm"
+
+
+def test_mp4_recorder_gets_matching_extension():
+    assert _audio_upload_extension("question.bin", "audio/mp4;codecs=mp4a.40.2") == ".m4a"
+
+
+def test_generic_mime_uses_known_filename_extension():
+    assert _audio_upload_extension("question.webm", "application/octet-stream") == ".webm"
