@@ -230,3 +230,8 @@ The supplied test suite checks health, configuration, demonstration chat and adm
 The default `render.yaml` now creates only the web service. During Blueprint deployment, paste the Internal Database URL of your existing Render Postgres database into `DATABASE_URL`. See `RENDER_EXISTING_DATABASE_FIX.md`.
 
 A separate `render-new-database.yaml` is retained for workspaces that have a free-database slot or will use a paid database.
+
+
+## Version 1.1 response reliability
+
+This package includes the empty-response retry fix described in `EMPTY_RESPONSE_FIX.md`. Recommended Render values are `AI_REASONING_EFFORT=low`, `AI_VERBOSITY=medium`, and `MAX_OUTPUT_TOKENS=6000`.

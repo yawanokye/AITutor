@@ -16,8 +16,14 @@ services:
         sync: false
       - key: AI_MODEL
         value: gpt-5.6-luna
+      - key: AI_REASONING_EFFORT
+        value: low
+      - key: AI_VERBOSITY
+        value: medium
+      - key: MAX_OUTPUT_TOKENS
+        value: 6000
       - key: TRANSCRIBE_MODEL
-        value: gpt-transcribe
+        value: gpt-4o-mini-transcribe
       - key: TTS_MODEL
         value: gpt-4o-mini-tts
       - key: DEFAULT_VOICE
