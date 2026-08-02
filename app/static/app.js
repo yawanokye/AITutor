@@ -585,6 +585,9 @@ function renderStep(plan) {
   const extraEquations = state.visualIndex === steps.length - 1 && plan.equations?.length
     ? `<div class="equation-stack">${plan.equations.map(eq => `<div>\\[${escapeHtml(eq)}\\]</div>`).join('')}</div>`
     : '';
+  const learnerPrompt = step.learner_prompt
+    ? `<div class="learner-prompt"><strong>Your turn:</strong> ${escapeHtml(step.learner_prompt)}</div>`
+    : '';
   visualContent.innerHTML = `
     <div class="step-board">
       <div class="step-number">${state.visualIndex + 1}</div>
@@ -592,7 +595,7 @@ function renderStep(plan) {
         <span class="board-kicker">Step ${state.visualIndex + 1}</span>
         <h3>${escapeHtml(step.title || `Step ${state.visualIndex + 1}`)}</h3>
         <p>${escapeHtml(step.explanation || '')}</p>
-        ${equation}${extraEquations}
+        ${equation}${extraEquations}${learnerPrompt}
       </div>
     </div>`;
 }
