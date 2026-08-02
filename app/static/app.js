@@ -240,8 +240,19 @@ async function toggleRecording() {
 
   try {
     state.recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const preferred = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : '';
-    state.mediaRecorder = new MediaRecorder(state.recordingStream, preferred ? { mimeType: preferred } : undefined);
+    const candidates = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/mp4;codecs=mp4a.40.2',
+      'audio/mp4',
+      'audio/ogg;codecs=opus',
+      'audio/ogg',
+    ];
+    const preferred = candidates.find(type => MediaRecorder.isTypeSupported(type)) || '';
+    state.mediaRecorder = new MediaRecorder(
+      state.recordingStream,
+      preferred ? { mimeType: preferred } : undefined,
+    );
     state.audioChunks = [];
     state.mediaRecorder.addEventListener('dataavailable', event => { if (event.data.size) state.audioChunks.push(event.data); });
     state.mediaRecorder.addEventListener('stop', transcribeRecording);
@@ -261,15 +272,30 @@ async function transcribeRecording() {
   el('recordLabel').textContent = 'Record';
   state.recordingStream?.getTracks().forEach(track => track.stop());
 
-  const mime = state.mediaRecorder?.mimeType || 'audio/webm';
+  const mime = state.mediaRecorder?.mimeType || state.audioChunks[0]?.type || 'audio/webm';
   const blob = new Blob(state.audioChunks, { type: mime });
   if (!blob.size) {
     setStatus('No audio was captured.');
     return;
   }
   setStatus('Transcribing your voice…', true);
+  const baseMime = mime.split(';', 1)[0].toLowerCase();
+  const extensionByMime = {
+    'audio/webm': 'webm',
+    'video/webm': 'webm',
+    'audio/mp4': 'm4a',
+    'video/mp4': 'mp4',
+    'audio/ogg': 'ogg',
+    'application/ogg': 'ogg',
+    'audio/wav': 'wav',
+    'audio/x-wav': 'wav',
+    'audio/mpeg': 'mp3',
+    'audio/aac': 'aac',
+    'audio/flac': 'flac',
+  };
+  const extension = extensionByMime[baseMime] || 'webm';
   const form = new FormData();
-  form.append('audio', blob, 'question.webm');
+  form.append('audio', blob, `question.${extension}`);
   try {
     const data = await apiJson('/api/transcribe', { method: 'POST', body: form });
     question.value = [question.value.trim(), data.text].filter(Boolean).join(' ');
