@@ -1,3 +1,9 @@
+databases:
+  - name: ai-tutor-db
+    plan: free
+    databaseName: ai_tutor
+    user: ai_tutor
+
 services:
   - type: web
     name: anovlad-ai-tutor
@@ -19,7 +25,7 @@ services:
       - key: TRANSCRIBE_MODEL
         value: gpt-transcribe
       - key: TTS_MODEL
-        value: gpt-4o-mini-tts
+        value: tts-1
       - key: DEFAULT_VOICE
         value: nova
       - key: DEMO_MODE
@@ -28,9 +34,9 @@ services:
         value: true
       - key: ADMIN_KEY
         generateValue: true
-      # Paste the Internal Database URL of your existing Render Postgres database.
-      # This Blueprint deliberately does not create another database.
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: ai-tutor-db
+          property: connectionString
       - key: RATE_LIMIT_PER_MINUTE
         value: 30

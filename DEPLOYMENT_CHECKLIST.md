@@ -39,3 +39,10 @@
 - [ ] Define escalation for inaccurate, unsafe or sensitive answers.
 - [ ] Move from free resources to paid production services.
 - [ ] Configure backups and monitoring.
+
+## When Render says only one free database is allowed
+
+- Use the default `render.yaml` in this fixed package.
+- Copy the existing Render database's Internal Database URL.
+- Enter it as `DATABASE_URL` during Blueprint deployment.
+- Do not delete an existing database unless you have confirmed that no other app needs it.

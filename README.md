@@ -224,3 +224,9 @@ DEMO_MODE=true ADMIN_KEY=test-admin pytest -q
 ```
 
 The supplied test suite checks health, configuration, demonstration chat and administrator protection.
+
+## Existing free Render database
+
+The default `render.yaml` now creates only the web service. During Blueprint deployment, paste the Internal Database URL of your existing Render Postgres database into `DATABASE_URL`. See `RENDER_EXISTING_DATABASE_FIX.md`.
+
+A separate `render-new-database.yaml` is retained for workspaces that have a free-database slot or will use a paid database.
