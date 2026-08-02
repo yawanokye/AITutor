@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 import re
 import time
 import uuid
@@ -22,6 +23,8 @@ from app.config import settings
 from app.knowledge import KnowledgeStore, extract_text, make_chunks
 from app.prompts import tutor_instructions
 from app.schemas import ChatResponse, ConfigResponse, SpeechRequest
+
+logger = logging.getLogger("ai_tutor")
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -118,6 +121,38 @@ def _response_input(
     return items
 
 
+
+def _extract_response_text(ai_response: Any) -> str:
+    """Extract visible text safely from a Responses API object."""
+    direct = getattr(ai_response, "output_text", "") or ""
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+
+    parts: list[str] = []
+    for item in getattr(ai_response, "output", []) or []:
+        if getattr(item, "type", None) != "message":
+            continue
+        for content in getattr(item, "content", []) or []:
+            content_type = getattr(content, "type", None)
+            if content_type == "output_text":
+                text = getattr(content, "text", "") or ""
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+            elif content_type == "refusal":
+                refusal = getattr(content, "refusal", "") or ""
+                if isinstance(refusal, str) and refusal.strip():
+                    parts.append(refusal.strip())
+    return "\n\n".join(parts).strip()
+
+
+def _response_diagnostic(ai_response: Any) -> dict[str, Any]:
+    incomplete = getattr(ai_response, "incomplete_details", None)
+    return {
+        "status": getattr(ai_response, "status", None),
+        "incomplete_reason": getattr(incomplete, "reason", None) if incomplete else None,
+        "output_types": [getattr(item, "type", None) for item in (getattr(ai_response, "output", []) or [])],
+    }
+
 def _demo_answer(message: str, has_image: bool, sources: list[str]) -> str:
     image_note = " I can see that you attached an image, but image analysis needs the API key to be enabled." if has_image else ""
     source_note = f" I found material from {', '.join(sources)}." if sources else " No course material has been uploaded yet."
@@ -157,6 +192,8 @@ async def health() -> dict[str, Any]:
         "app": settings.app_name,
         "openai_enabled": settings.openai_enabled,
         "knowledge_sources": len(knowledge.list_sources()),
+        "model": settings.ai_model,
+        "reasoning_effort": settings.ai_reasoning_effort,
     }
 
 
@@ -225,22 +262,49 @@ async def chat(
             image_data_url=image_data_url,
         )
 
-        def create_response():
+        def create_response(*, effort: str, token_budget: int):
             return openai_client.responses.create(
                 model=settings.ai_model,
                 instructions=instructions,
                 input=input_items,
-                max_output_tokens=1400,
+                reasoning={"effort": effort},
+                text={"verbosity": settings.ai_verbosity},
+                max_output_tokens=token_budget,
                 store=False,
             )
 
         try:
-            ai_response = await run_in_threadpool(create_response)
-            answer = (ai_response.output_text or "").strip()
+            ai_response = await run_in_threadpool(
+                create_response,
+                effort=settings.ai_reasoning_effort,
+                token_budget=settings.max_output_tokens,
+            )
+            answer = _extract_response_text(ai_response)
+
+            # A reasoning model can consume the output budget before emitting a
+            # visible message. Retry once with no reasoning and a larger budget.
+            if not answer:
+                diagnostic = _response_diagnostic(ai_response)
+                logger.warning("Empty AI response on first attempt: %s", diagnostic)
+                ai_response = await run_in_threadpool(
+                    create_response,
+                    effort="none",
+                    token_budget=max(settings.max_output_tokens, 8000),
+                )
+                answer = _extract_response_text(ai_response)
         except Exception as exc:
+            logger.exception("AI request failed")
             raise HTTPException(status_code=502, detail=f"AI service error: {type(exc).__name__}") from exc
         if not answer:
-            raise HTTPException(status_code=502, detail="The AI service returned an empty response.")
+            diagnostic = _response_diagnostic(ai_response)
+            logger.error("AI response remained empty after retry: %s", diagnostic)
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "The AI model used its response budget without producing visible text. "
+                    "Please try again with a shorter request."
+                ),
+            )
 
     history.append({"role": "user", "content": message or "Please explain the attached image."})
     history.append({"role": "assistant", "content": answer})
