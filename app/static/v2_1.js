@@ -32,6 +32,10 @@
         strokes: state.strokes.slice(-250),
         settings: {
           course: el('course').value,
+          classSelect: el('classSelect')?.value || '',
+          outcomeSelect: el('outcomeSelect')?.value || '',
+          weekSelect: el('weekSelect')?.value || '',
+          deliveryMode: el('deliveryMode')?.value || 'standard',
           level: el('level').value,
           tutorMode: el('tutorMode').value,
           visualPreference: el('visualPreference').value,
@@ -71,6 +75,18 @@
       el('replayButton').disabled = !state.lastAnswer;
       const settings = saved.settings || {};
       restoreSetting('course', settings.course);
+      restoreSetting('deliveryMode', settings.deliveryMode);
+      window.aiTutorApplyDeliveryMode?.(settings.deliveryMode || 'standard');
+      const restoreClassContext = () => {
+        restoreSetting('classSelect', settings.classSelect);
+        window.aiTutorClassChanged?.();
+        setTimeout(() => {
+          restoreSetting('outcomeSelect', settings.outcomeSelect);
+          restoreSetting('weekSelect', settings.weekSelect);
+        }, 120);
+      };
+      setTimeout(restoreClassContext, 600);
+      setTimeout(restoreClassContext, 1400);
       restoreSetting('level', settings.level);
       restoreSetting('tutorMode', settings.tutorMode);
       restoreSetting('visualPreference', settings.visualPreference);
@@ -573,9 +589,17 @@
   function workCheckMarkup(data) {
     const strengths = (data.strengths || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
     const corrections = (data.corrections || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+    const steps = (data.step_results || []).map(step => `
+      <div class="step-assessment ${escapeHtml(step.status || 'unclear')}">
+        <div><strong>Step ${Number(step.step_number) || 1}</strong><span>${escapeHtml((step.status || 'unclear').replace('_', ' '))}</span></div>
+        <p>${escapeHtml(step.label || '')}</p>
+        <small>${escapeHtml(step.feedback || '')}${step.correction ? ` Correction: ${escapeHtml(step.correction)}` : ''}</small>
+      </div>`).join('');
     return `
       <div class="score-ring" style="--score:${Number(data.score) || 0}"><strong>${Number(data.score) || 0}%</strong><span>${escapeHtml((data.verdict || 'unclear').replace('_', ' '))}</span></div>
       <p>${escapeHtml(data.summary || '')}</p>
+      ${data.first_error_step ? `<div class="first-error"><strong>First step needing correction:</strong> Step ${Number(data.first_error_step)}</div>` : '<div class="first-error success"><strong>No definite error point was identified.</strong></div>'}
+      ${steps ? `<h3>Step-by-step assessment</h3><div class="step-assessment-list">${steps}</div>` : ''}
       ${strengths ? `<h3>What is working</h3><ul>${strengths}</ul>` : ''}
       ${corrections ? `<h3>Corrections required</h3><ul>${corrections}</ul>` : ''}
       ${data.next_step ? `<div class="next-step-box"><strong>Next step</strong><p>${escapeHtml(data.next_step)}</p></div>` : ''}`;
@@ -597,6 +621,9 @@
       form.append('board_context', JSON.stringify({ visual: state.visualPlan, visible_page: state.visualIndex + 1, ink_strokes: state.strokes.length }));
       form.append('level', el('level').value);
       form.append('course', el('course').value.trim());
+      form.append('class_id', el('classSelect')?.value || '');
+      form.append('learning_outcome', el('outcomeSelect')?.value || '');
+      form.append('weekly_topic', el('weekSelect')?.value || '');
       form.append('board_image', blob, 'whiteboard-check.png');
       const data = await apiJson('/api/work/check', { method: 'POST', body: form });
       el('workCheckBody').innerHTML = workCheckMarkup(data);
@@ -632,7 +659,7 @@
     }
   });
 
-  ['course', 'level', 'tutorMode', 'visualPreference', 'visualRequested', 'autoSpeak', 'voice'].forEach(id => {
+  ['course', 'classSelect', 'outcomeSelect', 'weekSelect', 'deliveryMode', 'level', 'tutorMode', 'visualPreference', 'visualRequested', 'autoSpeak', 'voice'].forEach(id => {
     el(id)?.addEventListener('change', debouncePersist);
   });
   drawingCanvas.addEventListener('pointerup', () => {

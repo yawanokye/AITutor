@@ -1,0 +1,11 @@
+{
+  "name": "Anovlad Institutional AI Tutor",
+  "short_name": "AI Tutor",
+  "description": "Course-locked tutoring, visual explanations, guided practice and institutional learning analytics.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#eef4f1",
+  "theme_color": "#0b5d4b",
+  "icons": []
+}

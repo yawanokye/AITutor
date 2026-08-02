@@ -139,10 +139,10 @@ async function loadConfig() {
     const voiceSelect = el('voice');
     voiceSelect.innerHTML = config.voices.map(v => `<option value="${v}" ${v === config.default_voice ? 'selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('');
     el('connectionDot').classList.add('online');
-    el('statusText').textContent = config.openai_enabled ? 'AI services connected' : 'Demonstration mode';
-    el('modeNote').textContent = config.openai_enabled
-      ? `Text, image, audio and visual board enabled`
-      : 'Add an OpenAI API key on Render';
+    el('statusText').textContent = config.text_ai_enabled ? 'Institutional tutor connected' : 'Demonstration mode';
+    el('modeNote').textContent = config.text_ai_enabled
+      ? `${config.text_provider === 'deepseek' ? 'DeepSeek text tutoring' : 'OpenAI text tutoring'} • course controls enabled`
+      : 'Add an AI provider key on Render';
     el('visualRequested').disabled = !config.visual_plan_enabled;
     if (!config.visual_plan_enabled) el('visualRequested').checked = false;
     if (!config.openai_enabled) el('autoSpeak').checked = false;
@@ -154,15 +154,17 @@ async function loadConfig() {
 
 async function loadMaterials() {
   try {
-    const data = await apiJson('/api/materials');
+    const classId = el('materialScope')?.value || el('classSelect')?.value || '';
+    const data = await apiJson(`/api/materials${classId ? `?class_id=${encodeURIComponent(classId)}` : ''}`);
     const list = el('materialList');
     list.innerHTML = data.materials.length
-      ? data.materials.map(item => `<div class="material-item">${escapeHtml(item.source)} · ${item.chunks} extracts</div>`).join('')
-      : '<div class="material-item">No course materials uploaded.</div>';
+      ? data.materials.map(item => `<div class="material-item"><strong>${escapeHtml(item.source)}</strong><br><small>${escapeHtml((item.material_type || 'course').replace('_', ' '))} · ${item.chunks} extracts${item.class_id ? ' · class material' : ' · institution-wide'}</small></div>`).join('')
+      : '<div class="material-item">No approved materials are available for this scope.</div>';
   } catch (error) {
     el('materialStatus').textContent = error.message;
   }
 }
+window.aiTutorLoadMaterials = loadMaterials;
 
 function detachComposerImage() {
   const payload = { file: state.imageFile, url: state.imagePreviewUrl };
@@ -210,6 +212,10 @@ async function sendQuestion() {
   form.append('level', el('level').value);
   form.append('tutor_mode', el('tutorMode').value);
   form.append('course', el('course').value.trim());
+  form.append('class_id', el('classSelect')?.value || '');
+  form.append('learning_outcome', el('outcomeSelect')?.value || '');
+  form.append('weekly_topic', el('weekSelect')?.value || '');
+  form.append('delivery_mode', el('deliveryMode')?.value || 'standard');
   form.append('visual_requested', String(el('visualRequested').checked));
   form.append('visual_preference', el('visualPreference').value);
   form.append('board_context', boardPayload.context || '');
@@ -233,7 +239,7 @@ async function sendQuestion() {
 
     setStatus(data.visual && data.visual.kind !== 'none' ? 'Answer and visual explanation ready' : 'Answer ready');
     if (window.innerWidth <= 960 && data.visual && data.visual.kind !== 'none') setMobileView('visual');
-    if (el('autoSpeak').checked && state.config?.openai_enabled) await speakText(data.answer);
+    if (el('autoSpeak').checked && state.config?.openai_enabled && el('deliveryMode')?.value !== 'text_only') await speakText(data.answer);
   } catch (error) {
     hideTyping();
     if (imagePayload.url) URL.revokeObjectURL(imagePayload.url);
@@ -418,14 +424,21 @@ function removeBoardAttachment() {
 async function uploadMaterials() {
   const files = [...el('materialFiles').files];
   const adminKey = el('adminKey').value;
-  if (!adminKey || !files.length) {
-    el('materialStatus').textContent = 'Enter the administrator key and select at least one file.';
+  const classId = el('materialScope')?.value || '';
+  if (!files.length) {
+    el('materialStatus').textContent = 'Select at least one file.';
+    return;
+  }
+  if (!classId && !adminKey) {
+    el('materialStatus').textContent = 'Enter the administrator key for institution-wide materials, or select a class you teach.';
     return;
   }
   const form = new FormData();
   form.append('admin_key', adminKey);
+  form.append('class_id', classId);
+  form.append('material_type', el('materialType')?.value || 'course');
   files.forEach(file => form.append('files', file, file.name));
-  el('materialStatus').textContent = 'Reading and indexing the materials…';
+  el('materialStatus').textContent = 'Reading, scoping and indexing the materials…';
   try {
     const data = await apiJson('/api/materials/upload', { method: 'POST', body: form });
     const uploaded = data.uploaded.map(item => `${item.source} (${item.chunks} extracts)`).join(', ');
@@ -437,6 +450,27 @@ async function uploadMaterials() {
     el('materialStatus').textContent = error.message;
   }
 }
+
+function downloadLessonPack() {
+  if (!state.chatLog.length) {
+    setStatus('There is no lesson content to save yet.');
+    return;
+  }
+  const course = el('course')?.value || 'Independent learning';
+  const outcome = el('outcomeSelect')?.value || 'Not selected';
+  const week = el('weekSelect')?.value || 'Not selected';
+  const transcript = state.chatLog.map(item => `${item.role === 'assistant' ? 'AI TUTOR' : 'LEARNER'}\n${item.text}`).join('\n\n');
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(course)} lesson pack</title><style>body{font-family:Arial,sans-serif;max-width:820px;margin:32px auto;padding:0 20px;line-height:1.55;color:#172b26}h1{color:#0b5d4b}.meta{background:#eef6f3;padding:16px;border-radius:12px}pre{white-space:pre-wrap;font-family:inherit}</style></head><body><h1>${escapeHtml(course)} lesson pack</h1><div class="meta"><strong>Learning outcome:</strong> ${escapeHtml(outcome)}<br><strong>Weekly topic:</strong> ${escapeHtml(week)}<br><strong>Saved:</strong> ${escapeHtml(new Date().toLocaleString())}</div><pre>${escapeHtml(transcript)}</pre><p><small>AI-generated learning support. Verify important content against approved course materials.</small></p></body></html>`;
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `ai-tutor-lesson-pack-${new Date().toISOString().slice(0,10)}.html`;
+  link.click();
+  URL.revokeObjectURL(url);
+  setStatus('Low-data lesson pack saved.');
+}
+
 
 function resetVisualBoard() {
   state.visualPlan = null;
@@ -985,8 +1019,10 @@ el('imageInput').addEventListener('change', event => previewImage(event.target.f
 el('removeImage').addEventListener('click', clearImage);
 el('removeBoardAttachment').addEventListener('click', removeBoardAttachment);
 el('uploadMaterials').addEventListener('click', uploadMaterials);
+el('materialScope')?.addEventListener('change', loadMaterials);
 el('clearChat').addEventListener('click', clearChat);
 el('exportChat').addEventListener('click', exportChat);
+el('downloadLessonPack').addEventListener('click', downloadLessonPack);
 el('replayButton').addEventListener('click', () => state.lastAudioUrl ? audioPlayer.play() : speakText(state.lastAnswer));
 el('readVisual').addEventListener('click', () => speakText(visualPlanToSpeech(state.visualPlan)));
 el('previousVisual').addEventListener('click', () => { state.visualIndex -= 1; clearInk(false); renderCurrentVisual(); });
@@ -1020,7 +1056,29 @@ boardResizeObserver.observe(visualViewport);
 window.addEventListener('resize', resizeDrawingCanvas);
 document.addEventListener('fullscreenchange', () => setTimeout(resizeDrawingCanvas, 100));
 
+function applyDeliveryMode(mode = el('deliveryMode')?.value || 'standard') {
+  document.body.classList.toggle('low-data-mode', mode === 'low_data');
+  document.body.classList.toggle('text-only-mode', mode === 'text_only');
+  if (mode === 'text_only') {
+    el('visualRequested').checked = false;
+    el('autoSpeak').checked = false;
+    el('visualPreference').disabled = true;
+  } else {
+    el('visualPreference').disabled = false;
+    if (mode === 'low_data') {
+      el('autoSpeak').checked = false;
+      el('visualRequested').checked = true;
+      el('visualPreference').value = 'steps';
+    }
+  }
+  window.dispatchEvent(new CustomEvent('ai-tutor-delivery-mode', { detail: { mode } }));
+}
+window.aiTutorApplyDeliveryMode = applyDeliveryMode;
+el('deliveryMode')?.addEventListener('change', event => applyDeliveryMode(event.target.value));
+el('classSelect')?.addEventListener('change', () => { window.aiTutorClassChanged?.(); loadMaterials(); });
+
 setBoardTool('pointer');
 loadConfig();
 loadMaterials();
+applyDeliveryMode();
 requestAnimationFrame(resizeDrawingCanvas);
