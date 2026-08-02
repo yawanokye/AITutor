@@ -6,7 +6,7 @@ os.environ.setdefault("DATABASE_URL", "")
 
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import _extract_response_text, app
 
 
 client = TestClient(app)
@@ -48,3 +48,19 @@ def test_material_upload_requires_admin_key():
         files={"files": ("notes.txt", b"A simple course note.", "text/plain")},
     )
     assert response.status_code == 401
+
+
+def test_extract_response_text_from_message_items():
+    class Part:
+        type = "output_text"
+        text = "Visible answer"
+
+    class Item:
+        type = "message"
+        content = [Part()]
+
+    class FakeResponse:
+        output_text = ""
+        output = [Item()]
+
+    assert _extract_response_text(FakeResponse()) == "Visible answer"
