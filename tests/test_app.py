@@ -19,6 +19,9 @@ from app.schemas import VisualPlan
 
 
 client = TestClient(app)
+ONE_PIXEL_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 def test_health():
@@ -26,17 +29,19 @@ def test_health():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["version"] == "2.0.0"
+    assert data["version"] == "2.1.0"
     assert data["visual_plan_enabled"] is True
 
 
-def test_config():
+def test_config_exposes_interactive_features():
     response = client.get("/api/config")
     assert response.status_code == 200
     data = response.json()
     assert data["demo_mode"] is True
     assert data["visual_plan_enabled"] is True
-    assert data["image_detail"] in {"low", "high", "original", "auto"}
+    assert data["interactive_practice_enabled"] is True
+    assert data["work_check_enabled"] is True
+    assert data["image_detail"] in {"low", "high", "auto"}
 
 
 def test_demo_chat_returns_visual_plan():
@@ -61,10 +66,6 @@ def test_demo_chat_returns_visual_plan():
 
 
 def test_demo_chat_can_accept_whiteboard_snapshot():
-    # One-pixel transparent PNG.
-    png = base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-    )
     response = client.post(
         "/api/chat",
         data={
@@ -76,10 +77,73 @@ def test_demo_chat_can_accept_whiteboard_snapshot():
             "board_context": '{"visible_page": 1, "learner_ink_strokes": 2}',
             "visual_requested": "true",
         },
-        files={"board_image": ("whiteboard.png", png, "image/png")},
+        files={"board_image": ("whiteboard.png", ONE_PIXEL_PNG, "image/png")},
     )
     assert response.status_code == 200
     assert response.json()["visual"] is not None
+
+
+def test_demo_practice_flow():
+    start = client.post(
+        "/api/practice/start",
+        data={
+            "topic": "One-way ANOVA",
+            "level": "University",
+            "course": "Statistics",
+            "question_count": "3",
+        },
+    )
+    assert start.status_code == 200
+    question = start.json()
+    assert question["practice_id"]
+    assert question["question_number"] == 1
+    assert question["hint"]
+
+    check = client.post(
+        "/api/practice/check",
+        data={
+            "practice_id": question["practice_id"],
+            "answer": "It explains the main purpose and central idea of one-way ANOVA.",
+        },
+    )
+    assert check.status_code == 200
+    result = check.json()
+    assert "correct" in result
+    assert "feedback" in result
+    assert result["attempts"] == 1
+
+
+def test_demo_practice_reveal_advances():
+    start = client.post(
+        "/api/practice/start",
+        data={"topic": "Fractions", "level": "Junior High School", "question_count": "2"},
+    ).json()
+    response = client.post(
+        "/api/practice/reveal",
+        data={"practice_id": start["practice_id"]},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["expected_answer"]
+    assert data["explanation"]
+
+
+def test_demo_work_check_returns_score_and_visual():
+    response = client.post(
+        "/api/work/check",
+        data={
+            "problem_context": "Solve 2x + 4 = 10",
+            "board_context": '{"ink_strokes": 3}',
+            "level": "Junior High School",
+            "course": "Mathematics",
+        },
+        files={"board_image": ("working.png", ONE_PIXEL_PNG, "image/png")},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert 0 <= data["score"] <= 100
+    assert data["visual"] is not None
+    assert data["next_step"]
 
 
 def test_visual_normalisation_clamps_image_boxes():
@@ -107,13 +171,17 @@ def test_image_annotation_becomes_none_without_image():
     assert normalised.kind == "none"
 
 
-def test_index_contains_live_whiteboard():
+def test_index_contains_v21_interactive_controls():
     response = client.get("/")
     assert response.status_code == 200
     html = response.text
     assert 'id="drawingCanvas"' in html
     assert 'id="attachBoard"' in html
     assert 'id="visualPreference"' in html
+    assert 'id="startPractice"' in html
+    assert 'id="checkWork"' in html
+    assert 'id="teachVisual"' in html
+    assert '/static/v2_1.js?v=2.1.0' in html
 
 
 def test_material_upload_requires_admin_key():
