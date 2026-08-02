@@ -28,7 +28,7 @@ class Settings:
     transcribe_model: str = os.getenv("TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
     tts_model: str = os.getenv("TTS_MODEL", "gpt-4o-mini-tts")
     default_voice: str = os.getenv("DEFAULT_VOICE", "nova")
-    image_detail: str = os.getenv("IMAGE_DETAIL", "original").strip().lower()
+    image_detail: str = os.getenv("IMAGE_DETAIL", "high").strip().lower()
     visual_plan_enabled: bool = _bool_env("VISUAL_PLAN_ENABLED", True)
     admin_key: str = os.getenv("ADMIN_KEY", "change-this-admin-key")
     database_url: str = os.getenv("DATABASE_URL", "")

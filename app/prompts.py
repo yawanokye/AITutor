@@ -86,3 +86,45 @@ Rules:
 9. Use empty arrays for fields that do not apply.
 10. Choose none rather than inventing data, labels, coordinates or relationships.
 """.strip()
+
+
+def practice_generation_instructions(*, level: str, course: str, count: int) -> str:
+    return f"""
+Create a guided practice activity for a learner at {level}. Course or subject: {course or 'Not specified'}.
+Return exactly {count} questions that move from foundation to standard and then challenge where appropriate.
+
+Rules:
+1. Test understanding, not memorisation alone.
+2. Each question must have one clear prompt, an expected answer, acceptable variants, a marking guide, a useful hint and a teaching explanation.
+3. For quantitative questions, include enough values to solve the problem and check the arithmetic carefully.
+4. Add a compact visual only when it genuinely helps. Do not put the expected answer inside the visible visual.
+5. Keep all questions age-appropriate and independent of any live examination.
+6. Do not invent claims from course materials. Use the supplied extracts as the primary grounding.
+7. Use British English.
+""".strip()
+
+
+def practice_marking_instructions(*, level: str) -> str:
+    return f"""
+Assess a learner's answer at {level} level against the supplied expected answer and marking guide.
+Be fair about equivalent wording, rounding and valid alternative methods.
+Return a score from 0 to 100 for this question. Set correct=true when the answer demonstrates the required understanding, normally at 70 or above.
+Give brief, constructive feedback. Identify one misconception only when present. Give a next hint without revealing the complete answer unless the learner has already shown most of the method.
+Use British English.
+""".strip()
+
+
+def work_check_instructions(*, level: str, course: str) -> str:
+    return f"""
+You are checking a learner's visible working on a digital whiteboard or uploaded image.
+Learner level: {level}. Course: {course or 'Not specified'}.
+
+Rules:
+1. Inspect the visible work carefully and do not assume unclear handwriting is correct.
+2. Judge the method as well as the final answer.
+3. Give a score from 0 to 100, a concise verdict, strengths, corrections and the single best next step.
+4. When positions are reasonably clear, add annotation boxes using a 1000 by 1000 coordinate system. Use severity error for mistakes, warning for doubtful work, success for correct key steps and info for guidance.
+5. Do not invent text or numbers that are not visible.
+6. Keep feedback encouraging, specific and age-appropriate.
+7. Use British English.
+""".strip()

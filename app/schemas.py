@@ -14,6 +14,8 @@ class VisualStep(BaseModel):
     title: str = Field(default="", max_length=120)
     explanation: str = Field(default="", max_length=700)
     equation: str = Field(default="", max_length=500)
+    narration: str = Field(default="", max_length=900)
+    learner_prompt: str = Field(default="", max_length=500)
 
 
 class VisualPoint(BaseModel):
@@ -33,6 +35,7 @@ class VisualAnnotation(BaseModel):
     y: float = Field(ge=0, le=1000)
     width: float = Field(ge=1, le=1000)
     height: float = Field(ge=1, le=1000)
+    severity: Literal["info", "success", "warning", "error"] = "info"
 
 
 class DiagramNode(BaseModel):
@@ -104,6 +107,79 @@ class ChatResponse(BaseModel):
     visual: VisualPlan | None = None
 
 
+class WorkCheck(BaseModel):
+    verdict: Literal["correct", "partly_correct", "needs_revision", "unclear"] = "unclear"
+    score: int = Field(default=0, ge=0, le=100)
+    summary: str = Field(default="", max_length=700)
+    strengths: list[str] = Field(default_factory=list, max_length=5)
+    corrections: list[str] = Field(default_factory=list, max_length=6)
+    next_step: str = Field(default="", max_length=500)
+    annotations: list[VisualAnnotation] = Field(default_factory=list, max_length=8)
+
+
+class WorkCheckResponse(WorkCheck):
+    visual: VisualPlan | None = None
+
+
+class PracticeQuestion(BaseModel):
+    id: str = Field(min_length=1, max_length=40)
+    prompt: str = Field(min_length=1, max_length=1200)
+    expected_answer: str = Field(min_length=1, max_length=1000)
+    accepted_variants: list[str] = Field(default_factory=list, max_length=8)
+    marking_guide: str = Field(default="", max_length=1000)
+    hint: str = Field(default="", max_length=600)
+    explanation: str = Field(default="", max_length=1200)
+    difficulty: Literal["foundation", "standard", "challenge"] = "standard"
+    visual: VisualPlan | None = None
+
+
+class PracticeActivity(BaseModel):
+    title: str = Field(default="Practice activity", max_length=160)
+    topic: str = Field(default="", max_length=200)
+    questions: list[PracticeQuestion] = Field(min_length=1, max_length=6)
+
+
+class PracticeEvaluation(BaseModel):
+    correct: bool = False
+    score: int = Field(default=0, ge=0, le=100)
+    feedback: str = Field(default="", max_length=800)
+    misconception: str = Field(default="", max_length=500)
+    next_hint: str = Field(default="", max_length=500)
+
+
+class PracticeQuestionResponse(BaseModel):
+    practice_id: str
+    title: str
+    topic: str
+    question_id: str
+    question_number: int
+    question_count: int
+    prompt: str
+    difficulty: str
+    visual: VisualPlan | None = None
+    hint: str = ""
+    score: int = 0
+    completed: bool = False
+
+
+class PracticeCheckResponse(BaseModel):
+    correct: bool
+    score_awarded: int
+    total_score: int
+    feedback: str
+    hint: str = ""
+    attempts: int
+    completed: bool = False
+    next_question: PracticeQuestionResponse | None = None
+
+
+class PracticeRevealResponse(BaseModel):
+    explanation: str
+    expected_answer: str
+    completed: bool = False
+    next_question: PracticeQuestionResponse | None = None
+
+
 class ConfigResponse(BaseModel):
     app_name: str
     openai_enabled: bool
@@ -115,3 +191,5 @@ class ConfigResponse(BaseModel):
     max_material_mb: int
     visual_plan_enabled: bool
     image_detail: str
+    interactive_practice_enabled: bool = True
+    work_check_enabled: bool = True

@@ -23,15 +23,33 @@ from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
 from app.knowledge import KnowledgeStore, extract_text, make_chunks
-from app.prompts import tutor_instructions, visual_plan_instructions
-from app.schemas import ChatResponse, ConfigResponse, SpeechRequest, VisualPlan
+from app.prompts import (
+    practice_generation_instructions,
+    practice_marking_instructions,
+    tutor_instructions,
+    visual_plan_instructions,
+    work_check_instructions,
+)
+from app.schemas import (
+    ChatResponse,
+    ConfigResponse,
+    PracticeActivity,
+    PracticeCheckResponse,
+    PracticeEvaluation,
+    PracticeQuestionResponse,
+    PracticeRevealResponse,
+    SpeechRequest,
+    VisualPlan,
+    WorkCheck,
+    WorkCheckResponse,
+)
 
 logger = logging.getLogger("ai_tutor")
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title=settings.app_name, version="2.0.0")
+app = FastAPI(title=settings.app_name, version="2.1.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 knowledge = KnowledgeStore(database_url=settings.database_url, storage_dir=settings.storage_dir)
@@ -43,6 +61,7 @@ sessions: dict[str, deque[dict[str, Any]]] = defaultdict(
     lambda: deque(maxlen=max(settings.history_turns * 2, 4))
 )
 rate_buckets: dict[str, deque[float]] = defaultdict(deque)
+practice_sessions: dict[str, dict[str, Any]] = {}
 
 SUPPORTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 SUPPORTED_AUDIO_MIME_TO_EXTENSION = {
@@ -64,7 +83,7 @@ SUPPORTED_AUDIO_MIME_TO_EXTENSION = {
 SUPPORTED_AUDIO_EXTENSIONS = {
     ".webm", ".wav", ".mp3", ".mp4", ".m4a", ".mpeg", ".mpga", ".ogg", ".aac", ".flac"
 }
-VOICE_OPTIONS = ["alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"]
+VOICE_OPTIONS = ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse", "marin", "cedar"]
 VISUAL_PREFERENCES = {"auto", "steps", "graph", "table", "diagram", "slides"}
 
 
@@ -116,7 +135,12 @@ def _audio_upload_extension(filename: str | None, content_type: str | None) -> s
 
 
 def _image_detail() -> str:
-    return settings.image_detail if settings.image_detail in {"low", "high", "original", "auto"} else "auto"
+    # The Responses API accepts low, high or auto. Keep backward compatibility with
+    # the earlier IMAGE_DETAIL=original setting by mapping it to high.
+    value = settings.image_detail.strip().lower()
+    if value == "original":
+        return "high"
+    return value if value in {"low", "high", "auto"} else "auto"
 
 
 def _course_context(query: str) -> tuple[str, list[str]]:
@@ -408,6 +432,8 @@ async def config() -> ConfigResponse:
         max_material_mb=settings.max_material_mb,
         visual_plan_enabled=settings.visual_plan_enabled,
         image_detail=_image_detail(),
+        interactive_practice_enabled=True,
+        work_check_enabled=True,
     )
 
 
@@ -543,6 +569,355 @@ async def chat(
         demo=settings.demo_mode,
         visual=visual,
     )
+
+
+def _normalise_practice_activity(activity: PracticeActivity) -> PracticeActivity:
+    data = activity.model_dump()
+    questions = []
+    used: set[str] = set()
+    for index, question in enumerate(data.get("questions", [])[:6], start=1):
+        question_id = re.sub(r"[^A-Za-z0-9_-]+", "-", str(question.get("id") or f"q{index}")).strip("-")[:40] or f"q{index}"
+        if question_id in used:
+            question_id = f"{question_id}-{index}"
+        used.add(question_id)
+        question["id"] = question_id
+        visual = question.get("visual")
+        if visual:
+            try:
+                question["visual"] = _normalise_visual_plan(VisualPlan.model_validate(visual), has_image=False).model_dump()
+            except Exception:
+                question["visual"] = None
+        questions.append(question)
+    data["questions"] = questions
+    return PracticeActivity.model_validate(data)
+
+
+def _practice_public_question(practice_id: str, state: dict[str, Any]) -> PracticeQuestionResponse:
+    activity: PracticeActivity = state["activity"]
+    index = int(state["index"])
+    completed = index >= len(activity.questions)
+    if completed:
+        return PracticeQuestionResponse(
+            practice_id=practice_id,
+            title=activity.title,
+            topic=activity.topic,
+            question_id="complete",
+            question_number=len(activity.questions),
+            question_count=len(activity.questions),
+            prompt="Practice complete.",
+            difficulty="standard",
+            visual=None,
+            score=int(state.get("total_score", 0)),
+            completed=True,
+        )
+    question = activity.questions[index]
+    return PracticeQuestionResponse(
+        practice_id=practice_id,
+        title=activity.title,
+        topic=activity.topic,
+        question_id=question.id,
+        question_number=index + 1,
+        question_count=len(activity.questions),
+        prompt=question.prompt,
+        difficulty=question.difficulty,
+        visual=question.visual,
+        hint=question.hint,
+        score=int(state.get("total_score", 0)),
+        completed=False,
+    )
+
+
+def _demo_practice(topic: str) -> PracticeActivity:
+    topic = topic.strip() or "the current topic"
+    return PracticeActivity(
+        title=f"Guided practice: {topic}",
+        topic=topic,
+        questions=[
+            {
+                "id": "q1",
+                "prompt": f"In one or two sentences, explain the main idea of {topic}.",
+                "expected_answer": f"A clear explanation of the central meaning or purpose of {topic}.",
+                "accepted_variants": [],
+                "marking_guide": "Award full credit for an accurate central idea stated in the learner's own words.",
+                "hint": "State what it is and why it matters.",
+                "explanation": "A strong answer defines the idea and connects it to its purpose or use.",
+                "difficulty": "foundation",
+                "visual": None,
+            },
+            {
+                "id": "q2",
+                "prompt": f"Give one suitable example or application of {topic} and explain the connection.",
+                "expected_answer": f"A relevant example with a correct explanation of how it demonstrates {topic}.",
+                "accepted_variants": [],
+                "marking_guide": "The example must be relevant and the connection must be explained.",
+                "hint": "Choose a familiar situation and name the exact feature that matches the topic.",
+                "explanation": "Examples are useful only when the link to the concept is made explicit.",
+                "difficulty": "standard",
+                "visual": None,
+            },
+        ],
+    )
+
+
+@app.post("/api/practice/start", response_model=PracticeQuestionResponse)
+async def start_practice(
+    request: Request,
+    topic: str = Form(...),
+    level: str = Form(default="University"),
+    course: str = Form(default=""),
+    question_count: int = Form(default=4),
+) -> PracticeQuestionResponse:
+    _check_rate_limit(request)
+    topic = topic.strip()
+    if not topic:
+        raise HTTPException(status_code=422, detail="Enter a topic for guided practice.")
+    count = max(2, min(int(question_count), 6))
+    context, _ = await run_in_threadpool(_course_context, " ".join([course, topic]).strip())
+
+    if settings.demo_mode:
+        activity = _demo_practice(topic)
+    else:
+        openai_client = _require_openai()
+        prompt = (
+            f"APPROVED COURSE CONTEXT\n{context}\n\n"
+            f"PRACTICE TOPIC\n{topic}\n\n"
+            "Create the activity now."
+        )
+
+        def create_activity():
+            return openai_client.responses.parse(
+                model=settings.ai_model,
+                instructions=practice_generation_instructions(level=level[:80], course=course[:160], count=count),
+                input=[{"role": "user", "content": prompt}],
+                text_format=PracticeActivity,
+                reasoning={"effort": "low"},
+                max_output_tokens=max(settings.visual_max_output_tokens, 5000),
+                store=False,
+            )
+
+        try:
+            response = await run_in_threadpool(create_activity)
+            parsed = getattr(response, "output_parsed", None)
+            if isinstance(parsed, PracticeActivity):
+                activity = parsed
+            elif isinstance(parsed, dict):
+                activity = PracticeActivity.model_validate(parsed)
+            else:
+                raise ValueError("The model did not return a practice activity.")
+        except Exception as exc:
+            logger.exception("Practice generation failed")
+            raise HTTPException(status_code=502, detail=f"Practice generation error: {type(exc).__name__}") from exc
+
+    activity = _normalise_practice_activity(activity)
+    practice_id = str(uuid.uuid4())
+    practice_sessions[practice_id] = {
+        "activity": activity,
+        "index": 0,
+        "attempts": {},
+        "total_score": 0,
+        "created_at": time.time(),
+    }
+    return _practice_public_question(practice_id, practice_sessions[practice_id])
+
+
+@app.post("/api/practice/check", response_model=PracticeCheckResponse)
+async def check_practice_answer(
+    request: Request,
+    practice_id: str = Form(...),
+    answer: str = Form(default=""),
+    board_image: UploadFile | None = File(default=None),
+) -> PracticeCheckResponse:
+    _check_rate_limit(request)
+    state = practice_sessions.get(practice_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="This practice session has expired. Start a new activity.")
+    activity: PracticeActivity = state["activity"]
+    index = int(state["index"])
+    if index >= len(activity.questions):
+        return PracticeCheckResponse(
+            correct=True,
+            score_awarded=0,
+            total_score=int(state.get("total_score", 0)),
+            feedback="Practice is already complete.",
+            attempts=0,
+            completed=True,
+        )
+    question = activity.questions[index]
+    answer = answer.strip()
+    board = await _read_image(board_image, label="Learner's practice working on the whiteboard")
+    if not answer and not board:
+        raise HTTPException(status_code=422, detail="Enter an answer or attach your whiteboard working.")
+
+    attempts = int(state["attempts"].get(question.id, 0)) + 1
+    state["attempts"][question.id] = attempts
+
+    if settings.demo_mode:
+        normalised_answer = re.sub(r"\s+", " ", answer.lower()).strip()
+        expected_terms = [term for term in re.findall(r"[a-zA-Z]{4,}", question.expected_answer.lower()) if term not in {"clear", "correct", "answer", "explanation"}]
+        overlap = sum(term in normalised_answer for term in expected_terms[:8])
+        correct = bool(normalised_answer) and (overlap >= max(1, min(2, len(expected_terms))))
+        evaluation = PracticeEvaluation(
+            correct=correct,
+            score=80 if correct else 35,
+            feedback="Your answer captures the main idea." if correct else "Your answer needs a clearer link to the key idea.",
+            misconception="" if correct else "The response is too general.",
+            next_hint="" if correct else question.hint,
+        )
+    else:
+        openai_client = _require_openai()
+        content: list[dict[str, Any]] = [{
+            "type": "input_text",
+            "text": (
+                f"QUESTION\n{question.prompt}\n\n"
+                f"EXPECTED ANSWER\n{question.expected_answer}\n\n"
+                f"ACCEPTED VARIANTS\n{'; '.join(question.accepted_variants)}\n\n"
+                f"MARKING GUIDE\n{question.marking_guide}\n\n"
+                f"LEARNER ANSWER\n{answer or '[supplied as whiteboard image]'}"
+            ),
+        }]
+        if board:
+            content.append({"type": "input_image", "image_url": board["data_url"], "detail": _image_detail()})
+
+        def create_evaluation():
+            return openai_client.responses.parse(
+                model=settings.ai_model,
+                instructions=practice_marking_instructions(level="learner"),
+                input=[{"role": "user", "content": content}],
+                text_format=PracticeEvaluation,
+                reasoning={"effort": "low"},
+                max_output_tokens=1800,
+                store=False,
+            )
+
+        try:
+            response = await run_in_threadpool(create_evaluation)
+            parsed = getattr(response, "output_parsed", None)
+            evaluation = parsed if isinstance(parsed, PracticeEvaluation) else PracticeEvaluation.model_validate(parsed)
+        except Exception as exc:
+            logger.exception("Practice marking failed")
+            raise HTTPException(status_code=502, detail=f"Practice marking error: {type(exc).__name__}") from exc
+
+    score_awarded = int(round(evaluation.score / len(activity.questions)))
+    next_question = None
+    completed = False
+    if evaluation.correct:
+        state["total_score"] = min(100, int(state.get("total_score", 0)) + score_awarded)
+        state["index"] = index + 1
+        completed = state["index"] >= len(activity.questions)
+        if not completed:
+            next_question = _practice_public_question(practice_id, state)
+
+    return PracticeCheckResponse(
+        correct=evaluation.correct,
+        score_awarded=score_awarded if evaluation.correct else 0,
+        total_score=int(state.get("total_score", 0)),
+        feedback=evaluation.feedback,
+        hint=evaluation.next_hint or (question.hint if not evaluation.correct and attempts >= 1 else ""),
+        attempts=attempts,
+        completed=completed,
+        next_question=next_question,
+    )
+
+
+@app.post("/api/practice/reveal", response_model=PracticeRevealResponse)
+async def reveal_practice_solution(
+    request: Request,
+    practice_id: str = Form(...),
+) -> PracticeRevealResponse:
+    _check_rate_limit(request)
+    state = practice_sessions.get(practice_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="This practice session has expired.")
+    activity: PracticeActivity = state["activity"]
+    index = int(state["index"])
+    if index >= len(activity.questions):
+        return PracticeRevealResponse(explanation="Practice is complete.", expected_answer="", completed=True)
+    question = activity.questions[index]
+    state["index"] = index + 1
+    completed = state["index"] >= len(activity.questions)
+    next_question = None if completed else _practice_public_question(practice_id, state)
+    return PracticeRevealResponse(
+        explanation=question.explanation,
+        expected_answer=question.expected_answer,
+        completed=completed,
+        next_question=next_question,
+    )
+
+
+@app.post("/api/work/check", response_model=WorkCheckResponse)
+async def check_whiteboard_work(
+    request: Request,
+    problem_context: str = Form(default=""),
+    board_context: str = Form(default=""),
+    level: str = Form(default="University"),
+    course: str = Form(default=""),
+    board_image: UploadFile = File(...),
+) -> WorkCheckResponse:
+    _check_rate_limit(request)
+    board = await _read_image(board_image, label="Learner's current whiteboard working")
+    if board is None:
+        raise HTTPException(status_code=422, detail="Attach the whiteboard before checking the work.")
+    problem_context = problem_context.strip()[:8000]
+    board_context = board_context.strip()[:12000]
+
+    if settings.demo_mode:
+        result = WorkCheck(
+            verdict="partly_correct",
+            score=60,
+            summary="The board was received. Live mode will inspect each visible step and mark exact regions.",
+            strengths=["The learner has shown working rather than only a final answer."],
+            corrections=["Enable the API key for detailed mathematical and handwriting analysis."],
+            next_step="State the problem above the working, then use Check my work again.",
+            annotations=[],
+        )
+    else:
+        openai_client = _require_openai()
+        content = [
+            {
+                "type": "input_text",
+                "text": (
+                    f"PROBLEM OR QUESTION CONTEXT\n{problem_context or 'Not supplied'}\n\n"
+                    f"WHITEBOARD STRUCTURE\n{board_context or 'Not supplied'}\n\n"
+                    "Inspect the image and return the work check."
+                ),
+            },
+            {"type": "input_image", "image_url": board["data_url"], "detail": _image_detail()},
+        ]
+
+        def create_work_check():
+            return openai_client.responses.parse(
+                model=settings.ai_model,
+                instructions=work_check_instructions(level=level[:80], course=course[:160]),
+                input=[{"role": "user", "content": content}],
+                text_format=WorkCheck,
+                reasoning={"effort": "low"},
+                max_output_tokens=2600,
+                store=False,
+            )
+
+        try:
+            response = await run_in_threadpool(create_work_check)
+            parsed = getattr(response, "output_parsed", None)
+            result = parsed if isinstance(parsed, WorkCheck) else WorkCheck.model_validate(parsed)
+        except Exception as exc:
+            logger.exception("Whiteboard work check failed")
+            raise HTTPException(status_code=502, detail=f"Work-check error: {type(exc).__name__}") from exc
+
+    visual = VisualPlan(
+        kind="image_annotation" if result.annotations else "steps",
+        title="Tutor check of your working",
+        caption=result.summary,
+        steps=[
+            {"title": "What is working", "explanation": item, "equation": "", "narration": item}
+            for item in result.strengths[:3]
+        ] + [
+            {"title": "Correction", "explanation": item, "equation": "", "narration": item}
+            for item in result.corrections[:4]
+        ] + ([{"title": "Next step", "explanation": result.next_step, "equation": "", "narration": result.next_step}] if result.next_step else []),
+        annotations=result.annotations,
+    )
+    visual = _normalise_visual_plan(visual, has_image=True)
+    return WorkCheckResponse(**result.model_dump(), visual=visual)
 
 
 @app.post("/api/transcribe")
