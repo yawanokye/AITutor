@@ -13,23 +13,25 @@ from typing import Any
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+
 try:
     from openai import OpenAI
 except ImportError:  # Allows demo-mode tests before dependencies are installed.
     OpenAI = None  # type: ignore[assignment,misc]
+
 from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
 from app.knowledge import KnowledgeStore, extract_text, make_chunks
-from app.prompts import tutor_instructions
-from app.schemas import ChatResponse, ConfigResponse, SpeechRequest
+from app.prompts import tutor_instructions, visual_plan_instructions
+from app.schemas import ChatResponse, ConfigResponse, SpeechRequest, VisualPlan
 
 logger = logging.getLogger("ai_tutor")
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title=settings.app_name, version="1.2.0")
+app = FastAPI(title=settings.app_name, version="2.0.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 knowledge = KnowledgeStore(database_url=settings.database_url, storage_dir=settings.storage_dir)
@@ -63,6 +65,7 @@ SUPPORTED_AUDIO_EXTENSIONS = {
     ".webm", ".wav", ".mp3", ".mp4", ".m4a", ".mpeg", ".mpga", ".ogg", ".aac", ".flac"
 }
 VOICE_OPTIONS = ["alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"]
+VISUAL_PREFERENCES = {"auto", "steps", "graph", "table", "diagram", "slides"}
 
 
 def _check_rate_limit(request: Request) -> None:
@@ -107,12 +110,13 @@ def _audio_upload_extension(filename: str | None, content_type: str | None) -> s
     if filename_extension in SUPPORTED_AUDIO_EXTENSIONS:
         return filename_extension
 
-    # Browsers and proxies sometimes replace a valid audio MIME type with a
-    # generic binary type. In that case, the recognised filename extension is
-    # the only reliable signal available to the application.
     if base_type in {"", "application/octet-stream"} and filename_extension:
         return filename_extension if filename_extension in SUPPORTED_AUDIO_EXTENSIONS else None
     return None
+
+
+def _image_detail() -> str:
+    return settings.image_detail if settings.image_detail in {"low", "high", "original", "auto"} else "auto"
 
 
 def _course_context(query: str) -> tuple[str, list[str]]:
@@ -134,26 +138,47 @@ def _response_input(
     history: deque[dict[str, Any]],
     message: str,
     context: str,
-    image_data_url: str | None,
+    images: list[dict[str, str]],
+    board_context: str,
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for turn in history:
         items.append({"role": turn["role"], "content": turn["content"]})
 
+    board_section = ""
+    if board_context.strip():
+        board_section = (
+            "\n\nCURRENT WHITEBOARD CONTEXT\n"
+            f"{board_context.strip()[:12000]}\n"
+            "The context describes the visual already on screen. Learner ink may also appear in a supplied whiteboard image."
+        )
+
     user_text = (
         f"APPROVED COURSE CONTEXT\n{context}\n\n"
         f"LEARNER QUESTION\n{message.strip()}"
+        f"{board_section}"
     )
-    if image_data_url:
-        content: list[dict[str, Any]] = [
-            {"type": "input_text", "text": user_text},
-            {"type": "input_image", "image_url": image_data_url},
-        ]
+
+    if images:
+        content: list[dict[str, Any]] = [{"type": "input_text", "text": user_text}]
+        for index, image in enumerate(images, start=1):
+            content.append(
+                {
+                    "type": "input_text",
+                    "text": f"IMAGE {index}: {image['label']}",
+                }
+            )
+            content.append(
+                {
+                    "type": "input_image",
+                    "image_url": image["data_url"],
+                    "detail": _image_detail(),
+                }
+            )
         items.append({"role": "user", "content": content})
     else:
         items.append({"role": "user", "content": user_text})
     return items
-
 
 
 def _extract_response_text(ai_response: Any) -> str:
@@ -187,6 +212,7 @@ def _response_diagnostic(ai_response: Any) -> dict[str, Any]:
         "output_types": [getattr(item, "type", None) for item in (getattr(ai_response, "output", []) or [])],
     }
 
+
 def _demo_answer(message: str, has_image: bool, sources: list[str]) -> str:
     image_note = " I can see that you attached an image, but image analysis needs the API key to be enabled." if has_image else ""
     source_note = f" I found material from {', '.join(sources)}." if sources else " No course material has been uploaded yet."
@@ -196,6 +222,126 @@ def _demo_answer(message: str, has_image: bool, sources: list[str]) -> str:
         f"Your question was: **{message.strip()}**\n\n"
         "Add `OPENAI_API_KEY` in Render and set `DEMO_MODE=false` to receive full tutoring responses."
     )
+
+
+def _demo_visual(message: str, has_image: bool) -> VisualPlan:
+    title = "How the visual tutor will help"
+    if has_image:
+        return VisualPlan(
+            kind="steps",
+            title=title,
+            caption="In live mode, the tutor analyses the uploaded image and can place precise labels over relevant regions.",
+            steps=[
+                {"title": "Inspect", "explanation": "Identify the visible task, values, labels and learner working.", "equation": ""},
+                {"title": "Diagnose", "explanation": "Locate the first unclear or incorrect step and explain why it matters.", "equation": ""},
+                {"title": "Guide", "explanation": "Show the corrected method and let the learner check the next step.", "equation": ""},
+            ],
+        )
+    return VisualPlan(
+        kind="steps",
+        title=title,
+        caption="The live system converts the answer into a visual sequence that can be presented and annotated.",
+        steps=[
+            {"title": "Understand", "explanation": f"Identify what the question is asking: {message[:120]}", "equation": ""},
+            {"title": "Work", "explanation": "Display the method as clear steps, equations, a graph, table, diagram or slides.", "equation": ""},
+            {"title": "Check", "explanation": "Verify the result and use the whiteboard for learner annotations.", "equation": ""},
+        ],
+    )
+
+
+def _normalise_visual_plan(plan: VisualPlan | None, *, has_image: bool) -> VisualPlan | None:
+    if plan is None:
+        return None
+    data = plan.model_dump()
+
+    # Clamp and clean image boxes so they always remain on the normalised board.
+    cleaned_annotations: list[dict[str, Any]] = []
+    for annotation in data.get("annotations", [])[:8]:
+        x = max(0.0, min(float(annotation["x"]), 999.0))
+        y = max(0.0, min(float(annotation["y"]), 999.0))
+        width = max(1.0, min(float(annotation["width"]), 1000.0 - x))
+        height = max(1.0, min(float(annotation["height"]), 1000.0 - y))
+        cleaned_annotations.append({**annotation, "x": x, "y": y, "width": width, "height": height})
+    data["annotations"] = cleaned_annotations
+
+    # Keep line charts predictable and remove edges that point to missing nodes.
+    for series in data.get("series", []):
+        series["points"] = sorted(series.get("points", [])[:30], key=lambda point: point.get("x", 0))
+    node_ids = {node.get("id") for node in data.get("nodes", [])}
+    data["edges"] = [
+        edge for edge in data.get("edges", [])[:16]
+        if edge.get("source") in node_ids and edge.get("target") in node_ids
+    ]
+
+    headers = data.get("table_headers", [])[:8]
+    data["table_headers"] = headers
+    if headers:
+        width = len(headers)
+        rows: list[list[str]] = []
+        for row in data.get("table_rows", [])[:12]:
+            fitted = list(row[:width])
+            fitted.extend([""] * (width - len(fitted)))
+            rows.append(fitted)
+        data["table_rows"] = rows
+
+    kind = data.get("kind", "none")
+    valid = {
+        "steps": bool(data.get("steps") or data.get("equations")),
+        "graph": any(series.get("points") for series in data.get("series", [])),
+        "table": bool(data.get("table_headers") and data.get("table_rows")),
+        "diagram": bool(data.get("nodes")),
+        "image_annotation": bool(has_image and data.get("annotations")),
+        "slides": bool(data.get("slides")),
+        "none": True,
+    }
+    if not valid.get(kind, False):
+        data["kind"] = "none"
+        data["caption"] = data.get("caption") or "No additional visual was needed for this answer."
+    return VisualPlan.model_validate(data)
+
+
+def _create_visual_plan(
+    *,
+    openai_client: Any,
+    question: str,
+    answer: str,
+    level: str,
+    course: str,
+    preference: str,
+    display_image_data_url: str | None,
+) -> VisualPlan | None:
+    has_image = bool(display_image_data_url)
+    prompt_text = (
+        f"LEARNER LEVEL\n{level[:80]}\n\n"
+        f"COURSE\n{course[:160] or 'Not specified'}\n\n"
+        f"LEARNER QUESTION\n{question[:8000]}\n\n"
+        f"TUTOR ANSWER\n{answer[:16000]}"
+    )
+    content: list[dict[str, Any]] = [{"type": "input_text", "text": prompt_text}]
+    if display_image_data_url:
+        content.append(
+            {
+                "type": "input_image",
+                "image_url": display_image_data_url,
+                "detail": _image_detail(),
+            }
+        )
+
+    response = openai_client.responses.parse(
+        model=settings.ai_model,
+        instructions=visual_plan_instructions(has_image=has_image, preference=preference),
+        input=[{"role": "user", "content": content}],
+        text_format=VisualPlan,
+        reasoning={"effort": "low"},
+        max_output_tokens=settings.visual_max_output_tokens,
+        store=False,
+    )
+    parsed = getattr(response, "output_parsed", None)
+    if isinstance(parsed, VisualPlan):
+        return _normalise_visual_plan(parsed, has_image=has_image)
+    if isinstance(parsed, dict):
+        return _normalise_visual_plan(VisualPlan.model_validate(parsed), has_image=has_image)
+    return None
 
 
 def _plain_text_for_speech(text: str) -> str:
@@ -208,9 +354,24 @@ def _plain_text_for_speech(text: str) -> str:
     return clean[:4000]
 
 
+async def _read_image(upload: UploadFile | None, *, label: str) -> dict[str, str] | None:
+    if upload is None or not upload.filename:
+        return None
+    content_type = _base_media_type(upload.content_type)
+    if content_type not in SUPPORTED_IMAGE_TYPES:
+        raise HTTPException(status_code=415, detail="Use a JPG, PNG, WEBP or GIF image.")
+    image_bytes = await upload.read()
+    if not image_bytes:
+        raise HTTPException(status_code=422, detail="The attached image is empty.")
+    if len(image_bytes) > settings.max_image_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"Images must be no larger than {settings.max_image_mb} MB.")
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    return {"label": label, "data_url": f"data:{content_type};base64,{encoded}"}
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONResponse:
-    # Avoid returning secrets, stack traces or provider payloads to the browser.
+    logger.error("Unhandled application error: %s", type(exc).__name__, exc_info=(type(exc), exc, exc.__traceback__))
     return JSONResponse(status_code=500, content={"detail": f"The request could not be completed: {type(exc).__name__}"})
 
 
@@ -224,10 +385,13 @@ async def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "app": settings.app_name,
+        "version": app.version,
         "openai_enabled": settings.openai_enabled,
         "knowledge_sources": len(knowledge.list_sources()),
         "model": settings.ai_model,
         "reasoning_effort": settings.ai_reasoning_effort,
+        "visual_plan_enabled": settings.visual_plan_enabled,
+        "image_detail": _image_detail(),
     }
 
 
@@ -242,6 +406,8 @@ async def config() -> ConfigResponse:
         max_image_mb=settings.max_image_mb,
         max_audio_mb=settings.max_audio_mb,
         max_material_mb=settings.max_material_mb,
+        visual_plan_enabled=settings.visual_plan_enabled,
+        image_detail=_image_detail(),
     )
 
 
@@ -253,33 +419,45 @@ async def chat(
     level: str = Form(default="University"),
     tutor_mode: str = Form(default="guided"),
     course: str = Form(default=""),
+    visual_requested: bool = Form(default=True),
+    visual_preference: str = Form(default="auto"),
+    board_context: str = Form(default=""),
     image: UploadFile | None = File(default=None),
+    board_image: UploadFile | None = File(default=None),
 ) -> ChatResponse:
     _check_rate_limit(request)
     message = message.strip()
-    if not message and image is None:
-        raise HTTPException(status_code=422, detail="Enter a question or attach an image.")
+    if not message and image is None and board_image is None:
+        raise HTTPException(status_code=422, detail="Enter a question, attach an image, or attach the whiteboard.")
     if len(message) > 8000:
         raise HTTPException(status_code=413, detail="The question is too long. Keep it below 8,000 characters.")
+    if len(board_context) > 16000:
+        raise HTTPException(status_code=413, detail="The whiteboard context is too large.")
 
+    visual_preference = visual_preference if visual_preference in VISUAL_PREFERENCES else "auto"
     session_id = session_id.strip() or str(uuid.uuid4())
     history = sessions[session_id]
 
-    image_data_url: str | None = None
-    if image is not None and image.filename:
-        if image.content_type not in SUPPORTED_IMAGE_TYPES:
-            raise HTTPException(status_code=415, detail="Use a JPG, PNG, WEBP or GIF image.")
-        image_bytes = await image.read()
-        if len(image_bytes) > settings.max_image_mb * 1024 * 1024:
-            raise HTTPException(status_code=413, detail=f"Images must be no larger than {settings.max_image_mb} MB.")
-        encoded = base64.b64encode(image_bytes).decode("ascii")
-        image_data_url = f"data:{image.content_type};base64,{encoded}"
+    learner_image = await _read_image(image, label="Learner-uploaded image or photograph")
+    whiteboard_image = await _read_image(board_image, label="Current digital whiteboard snapshot with learner annotations")
+    images = [item for item in (learner_image, whiteboard_image) if item]
+    display_image_data_url = (
+        learner_image["data_url"] if learner_image else whiteboard_image["data_url"] if whiteboard_image else None
+    )
 
-    retrieval_query = " ".join(part for part in [course, message] if part).strip()
+    effective_message = message or (
+        "Please explain the part I marked on the whiteboard."
+        if whiteboard_image
+        else "Please analyse and explain the attached image."
+    )
+    retrieval_query = " ".join(part for part in [course, effective_message] if part).strip()
     context, sources = await run_in_threadpool(_course_context, retrieval_query)
 
+    visual: VisualPlan | None = None
     if settings.demo_mode:
-        answer = _demo_answer(message or "Please explain the attached image.", bool(image_data_url), sources)
+        answer = _demo_answer(effective_message, bool(images), sources)
+        if settings.visual_plan_enabled and visual_requested:
+            visual = _demo_visual(effective_message, bool(display_image_data_url))
     else:
         openai_client = _require_openai()
         instructions = tutor_instructions(
@@ -291,9 +469,10 @@ async def chat(
         )
         input_items = _response_input(
             history=history,
-            message=message or "Please analyse and explain the attached image.",
+            message=effective_message,
             context=context,
-            image_data_url=image_data_url,
+            images=images,
+            board_context=board_context,
         )
 
         def create_response(*, effort: str, token_budget: int):
@@ -315,8 +494,6 @@ async def chat(
             )
             answer = _extract_response_text(ai_response)
 
-            # A reasoning model can consume the output budget before emitting a
-            # visible message. Retry once with no reasoning and a larger budget.
             if not answer:
                 diagnostic = _response_diagnostic(ai_response)
                 logger.warning("Empty AI response on first attempt: %s", diagnostic)
@@ -340,9 +517,32 @@ async def chat(
                 ),
             )
 
-    history.append({"role": "user", "content": message or "Please explain the attached image."})
+        if settings.visual_plan_enabled and visual_requested:
+            try:
+                visual = await run_in_threadpool(
+                    _create_visual_plan,
+                    openai_client=openai_client,
+                    question=effective_message,
+                    answer=answer,
+                    level=level,
+                    course=course,
+                    preference=visual_preference,
+                    display_image_data_url=display_image_data_url,
+                )
+            except Exception:
+                # The written answer remains useful when the optional visual planner fails.
+                logger.exception("Visual plan generation failed")
+                visual = None
+
+    history.append({"role": "user", "content": effective_message})
     history.append({"role": "assistant", "content": answer})
-    return ChatResponse(answer=answer, sources=sources, session_id=session_id, demo=settings.demo_mode)
+    return ChatResponse(
+        answer=answer,
+        sources=sources,
+        session_id=session_id,
+        demo=settings.demo_mode,
+        visual=visual,
+    )
 
 
 @app.post("/api/transcribe")
@@ -368,8 +568,6 @@ async def transcribe(request: Request, audio: UploadFile = File(...)) -> dict[st
 
     buffer = io.BytesIO(data)
     safe_stem = Path(_safe_filename(audio.filename or "recording")).stem or "recording"
-    # Give the transcription service a filename that matches the actual MIME
-    # container. This matters on browsers that record MP4/M4A rather than WebM.
     buffer.name = f"{safe_stem}{extension}"
 
     def create_transcription():
@@ -402,7 +600,6 @@ async def speech(request: Request, payload: SpeechRequest) -> Response:
             "input": speech_text,
             "response_format": "mp3",
         }
-        # Prompted voice instructions are supported by GPT-4o mini TTS.
         if settings.tts_model.startswith("gpt-4o-mini-tts"):
             kwargs["instructions"] = "Speak as a calm, warm and patient tutor at a moderate pace."
         result = openai_client.audio.speech.create(**kwargs)
