@@ -1,34 +1,61 @@
-# Anovlad AI Tutor v2.0
+# Anovlad AI Tutor v2.1
 
-A Render-ready multimodal AI tutoring application with text, voice, image understanding, course-material grounding and an interactive visual whiteboard.
+A Render-ready multimodal tutoring application with text, voice, image understanding, course-material grounding, an interactive visual whiteboard, guided practice and AI feedback on learner working.
 
-## What v2.0 adds
+## What v2.1 adds
 
-The tutor now converts suitable answers into a structured visual plan and displays it on a live whiteboard. The board supports:
+### Guided practice and assessment
 
-- step-by-step mathematical and statistical workings,
+- generates two to six questions for a selected topic,
+- moves from foundation to standard and challenge questions,
+- accepts typed answers or whiteboard working,
+- marks equivalent wording and valid alternative methods,
+- provides a focused hint after an unsuccessful attempt,
+- reveals a worked solution when requested,
+- tracks progress and the current activity score.
+
+### Whiteboard work checking
+
+Learners can write, calculate, label or highlight on the board, then select **Check my work**. The tutor evaluates the method and result, identifies strengths and corrections, recommends the next step, and can place colour-coded annotations over the submitted board image.
+
+### Synchronised visual teaching
+
+The **Teach step by step** control presents one visual step at a time and speaks the matching narration. Learners can pause, stop, move between steps, replay an explanation and continue at their own pace.
+
+### Editable visuals
+
+- graph and table values can be edited as CSV,
+- diagram nodes can be dragged to improve the layout,
+- uploaded-image annotations distinguish information, correct work, cautions and errors,
+- learner pen strokes are preserved with undo, redo and clear controls.
+
+### Automatic workspace recovery
+
+The browser saves the current conversation, visual plan, learner ink and interface settings locally. Reopening or refreshing the page restores the latest workspace on that browser.
+
+## Visual whiteboard capabilities
+
+The tutor can display:
+
+- step-by-step mathematics and statistical workings,
 - equations rendered with MathJax,
-- line graphs with one or more data series,
+- line graphs with labelled axes and multiple series,
 - comparison and calculation tables,
 - labelled concept and process diagrams,
 - highlighted regions on an uploaded image,
 - short lesson-slide presentations,
-- pen, highlighter and eraser tools,
-- undo, redo and clear-ink controls,
-- full-screen presentation,
-- PNG download,
-- attaching the current board to the learner's next question.
+- a live board with pen, highlighter and eraser tools,
+- full-screen presentation and PNG export,
+- a board snapshot attached to the learner's next question.
 
-The last feature lets a student mark a step, label or region, then ask the tutor to explain the part they marked.
-
-## Existing capabilities retained
+## Other capabilities retained
 
 - text questions and multi-turn chat,
 - browser microphone recording,
 - speech-to-text transcription,
 - spoken answers with selectable voices,
-- image questions from photographs, screenshots and uploaded files,
-- animated tutor while audio is playing,
+- image questions from photographs, screenshots and uploads,
+- animated tutor while speech is playing,
 - PDF, DOCX, TXT, MD and CSV course-material uploads,
 - retrieval of relevant approved course extracts,
 - source labels in tutor answers,
@@ -43,40 +70,47 @@ The last feature lets a student mark a step, label or region, then ask the tutor
 
 ```text
 Student browser
-  ├─ typed question
-  ├─ recorded voice
+  ├─ typed or recorded question
   ├─ uploaded or photographed image
-  └─ annotated whiteboard snapshot
+  ├─ learner whiteboard working
+  └─ guided-practice answer
             │
             ▼
 FastAPI service on Render
   ├─ course-material retrieval
   ├─ multimodal tutoring response
   ├─ structured visual-plan generation
-  ├─ speech transcription and generation
-  └─ PostgreSQL learning-material storage
+  ├─ practice generation and marking
+  ├─ whiteboard image evaluation
+  └─ transcription and speech generation
             │
             ▼
-Written answer + audio + interactive visual whiteboard
+Written answer + audio + visual lesson + feedback + score
 ```
 
-The API key remains on the server and is never sent to the learner's browser.
+The API key stays on the server and is never sent to the learner's browser.
 
 ## Repository structure
 
 ```text
 app/
-  main.py             API routes, image handling and visual-plan generation
+  main.py             API routes, tutoring, practice and work checking
   config.py           environment settings
   knowledge.py        extraction, chunking and retrieval
-  prompts.py          tutor and visual-planner instructions
-  schemas.py          typed API and visual-plan models
+  prompts.py          tutor, visual, assessment and feedback instructions
+  schemas.py          typed API, visual and assessment models
   static/
-    index.html         chat and whiteboard interface
-    styles.css         responsive styling and board presentation
-    app.js             chat, audio, visual rendering and drawing tools
+    index.html         chat, practice and whiteboard interface
+    styles.css         responsive visual and assessment styling
+    app.js             core chat, audio, visual and drawing features
+    v2_1.js            practice, work checking, editing and recovery
+
+tests/
+  test_app.py          API and feature tests
+
 data/
   sample-course-note.txt
+
 render.yaml            Render Blueprint using an existing database
 requirements.txt
 .env.example
@@ -84,17 +118,18 @@ requirements.txt
 
 ## Upgrade the existing Render deployment
 
-1. Extract this ZIP.
-2. Replace the files in the root of the existing `AITutor` GitHub repository with the contents of this folder.
-3. Commit the changes to the `main` branch.
-4. Open the `anovlad-ai-tutor` service in Render.
-5. Add or confirm the environment variables below.
+1. Extract this ZIP or the smaller v2.1 patch.
+2. Upload the contents to the root of the existing `AITutor` GitHub repository and replace older files.
+3. Commit to the `main` branch.
+4. Open the existing `anovlad-ai-tutor` web service in Render.
+5. Confirm the environment values below.
 6. Select **Manual Deploy**, then **Clear build cache and deploy**.
-7. After the service becomes live, refresh the browser with `Ctrl + Shift + R`.
+7. Wait until the service becomes **Live**.
+8. Refresh the tutor with `Ctrl + Shift + R`.
 
-The default `render.yaml` creates only the web service. It does not attempt to create a second free PostgreSQL database.
+No database migration is required. The default `render.yaml` creates only the web service and uses your existing Render PostgreSQL database.
 
-## Required Render environment values
+## Render environment values
 
 ```text
 OPENAI_API_KEY=your-current-secret-key
@@ -104,7 +139,7 @@ AI_VERBOSITY=medium
 MAX_OUTPUT_TOKENS=6000
 VISUAL_PLAN_ENABLED=true
 VISUAL_MAX_OUTPUT_TOKENS=3500
-IMAGE_DETAIL=original
+IMAGE_DETAIL=high
 TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
 TTS_MODEL=gpt-4o-mini-tts
 DEFAULT_VOICE=nova
@@ -112,40 +147,41 @@ DEMO_MODE=false
 DATABASE_URL=your-existing-Render-internal-database-URL
 ```
 
-Keep `OPENAI_API_KEY`, `DATABASE_URL` and `ADMIN_KEY` in Render Environment settings. Do not place real secret values in GitHub.
+Keep `OPENAI_API_KEY`, `DATABASE_URL` and `ADMIN_KEY` only in Render Environment settings. Never commit real secret values to GitHub.
 
-## How the visual board works
+## How guided practice works
 
-The written tutor answer is generated first. When visual explanations are enabled, a second structured response selects one of these formats:
+1. The learner enters a topic and selects the number of questions.
+2. The backend grounds the activity in retrieved course extracts where available.
+3. The learner answers in text or writes on the board.
+4. The marking service compares the response with the expected answer and marking guide.
+5. A correct response advances to the next question. An incomplete response receives feedback and a hint.
+6. The learner may request the solution, which advances the activity without awarding the question score.
+
+Practice sessions are held in the running web service's memory. A Render restart can therefore end an unfinished practice activity. Persistent cross-device practice records require student accounts and database-backed activity storage in a later institutional release.
+
+## How whiteboard checking works
+
+The browser captures the current board as a PNG and sends it with the problem and visual context. The tutor returns a structured evaluation containing:
 
 ```text
-steps | graph | table | diagram | image_annotation | slides | none
+verdict | score | summary | strengths | corrections | next step | annotations
 ```
 
-The browser renders the returned structure with HTML and SVG. This keeps graphs, tables, equations and diagrams sharp and editable without generating a separate image for every question.
-
-For uploaded-image highlighting, coordinates are normalised to a 1000 by 1000 board. The interface maps those coordinates over the displayed image.
+Annotations use a normalised 1000 by 1000 coordinate system and are rendered over the captured board.
 
 ## Mobile use
 
-On smaller screens, the interface shows two tabs:
+On smaller screens, use:
 
-- **Conversation** for questions and answers
-- **Whiteboard** for the visual explanation and drawing tools
+- **Conversation** for chat and guided practice,
+- **Whiteboard** for visuals, handwriting and work checking.
 
-The Image button can open the phone camera where the browser supports camera capture.
+The Image control can open the phone camera when the browser supports camera capture.
 
 ## Course-material behaviour
 
-Each uploaded document is:
-
-1. checked for type and size,
-2. converted to text,
-3. divided into overlapping extracts,
-4. stored in PostgreSQL or the local fallback,
-5. searched when a learner asks a question.
-
-The tutor receives the most relevant extracts and is instructed to label material it uses as `[Source: filename]`.
+Each uploaded document is checked, converted to text, divided into overlapping extracts, stored, and searched when a learner asks a question. The tutor receives the most relevant extracts and labels material used as `[Source: filename]`.
 
 Scanned image-only PDFs need OCR before upload because the current material uploader reads embedded document text.
 
@@ -176,7 +212,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Set the API key and turn off demonstration mode in `.env`, then run:
+Add the API key and set `DEMO_MODE=false`, then run:
 
 ```bash
 uvicorn app.main:app --reload
@@ -190,12 +226,12 @@ Open `http://localhost:8000`.
 DEMO_MODE=true ADMIN_KEY=test-admin pytest -q
 ```
 
-The v2.0 package includes tests for health, configuration, demo chat, visual-plan output, whiteboard snapshots, image annotation validation, audio MIME compatibility and administrator protection.
+The v2.1 package contains 15 automated tests covering health and configuration, visual responses, audio MIME compatibility, guided practice, solution reveal, work checking, image validation and administrator protection.
 
 ## Scope of this release
 
-This release implements the interactive visual-explanation and whiteboard priority. It retains the lightweight animated tutor and spoken audio. A photorealistic WebRTC avatar and exported MP4 lesson-video service are separate integrations and are not included in v2.0.
+This release implements interactive teaching and assessment. It retains the lightweight animated tutor and spoken audio. It does not yet include student login, cross-device records, a teacher dashboard, a photorealistic WebRTC avatar or exported MP4 lesson videos.
 
 ## Production recommendations
 
-Before institution-wide use, add student authentication, enrolment controls, lecturer dashboards, quotas, persistent conversation storage, accessibility review, privacy notices, monitoring, backups and a paid Render service/database sized for the expected number of learners.
+Before institution-wide use, add authenticated student and teacher accounts, enrolment controls, database-backed progress records, quotas, persistent conversation history, accessibility review, privacy notices, monitoring, backups and a paid Render service/database sized for the expected number of learners.

@@ -27,7 +27,7 @@ services:
       - key: VISUAL_MAX_OUTPUT_TOKENS
         value: 3500
       - key: IMAGE_DETAIL
-        value: original
+        value: high
       - key: TRANSCRIBE_MODEL
         value: gpt-4o-mini-transcribe
       - key: TTS_MODEL
