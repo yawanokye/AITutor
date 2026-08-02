@@ -107,6 +107,18 @@ class ChatResponse(BaseModel):
     visual: VisualPlan | None = None
 
 
+class StepAssessment(BaseModel):
+    step_number: int = Field(default=1, ge=1, le=20)
+    label: str = Field(default="", max_length=180)
+    status: Literal["correct", "partly_correct", "incorrect", "unclear"] = "unclear"
+    feedback: str = Field(default="", max_length=700)
+    correction: str = Field(default="", max_length=700)
+    x: float | None = Field(default=None, ge=0, le=1000)
+    y: float | None = Field(default=None, ge=0, le=1000)
+    width: float | None = Field(default=None, ge=1, le=1000)
+    height: float | None = Field(default=None, ge=1, le=1000)
+
+
 class WorkCheck(BaseModel):
     verdict: Literal["correct", "partly_correct", "needs_revision", "unclear"] = "unclear"
     score: int = Field(default=0, ge=0, le=100)
@@ -114,7 +126,9 @@ class WorkCheck(BaseModel):
     strengths: list[str] = Field(default_factory=list, max_length=5)
     corrections: list[str] = Field(default_factory=list, max_length=6)
     next_step: str = Field(default="", max_length=500)
-    annotations: list[VisualAnnotation] = Field(default_factory=list, max_length=8)
+    first_error_step: int | None = Field(default=None, ge=1, le=20)
+    step_results: list[StepAssessment] = Field(default_factory=list, max_length=20)
+    annotations: list[VisualAnnotation] = Field(default_factory=list, max_length=12)
 
 
 class WorkCheckResponse(WorkCheck):
@@ -193,3 +207,156 @@ class ConfigResponse(BaseModel):
     image_detail: str
     interactive_practice_enabled: bool = True
     work_check_enabled: bool = True
+    text_ai_enabled: bool = False
+    deepseek_enabled: bool = False
+    text_provider: str = "openai"
+    default_text_model: str = ""
+    accounts_enabled: bool = True
+    live_video_enabled: bool = False
+    lesson_video_enabled: bool = False
+    require_login_for_ai: bool = False
+    institutional_mode: bool = True
+    low_bandwidth_enabled: bool = True
+    course_lock_enabled: bool = True
+
+
+# v2.2 accounts and dashboards
+class RegisterRequest(BaseModel):
+    display_name: str = Field(min_length=2, max_length=100)
+    email: str = Field(min_length=5, max_length=254)
+    password: str = Field(min_length=8, max_length=128)
+    role: Literal["student", "teacher"] = "student"
+    teacher_invite_code: str = Field(default="", max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def normalise_email(cls, value: str) -> str:
+        clean = value.strip().lower()
+        if "@" not in clean or clean.startswith("@") or clean.endswith("@"):
+            raise ValueError("Enter a valid email address.")
+        return clean
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class UserPublic(BaseModel):
+    id: str
+    email: str
+    display_name: str
+    role: Literal["student", "teacher", "admin"]
+    created_at: str = ""
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserPublic
+
+
+class ClassCreateRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=140)
+    subject: str = Field(default="", max_length=160)
+    knowledge_mode: Literal["course_only", "course_plus_approved", "general"] = "course_only"
+    learning_outcomes: list[str] = Field(default_factory=list, max_length=20)
+    weekly_topics: list[str] = Field(default_factory=list, max_length=24)
+    tutor_instructions: str = Field(default="", max_length=3000)
+
+
+class ClassProfileUpdateRequest(BaseModel):
+    name: str = Field(default="", max_length=140)
+    subject: str = Field(default="", max_length=160)
+    knowledge_mode: Literal["course_only", "course_plus_approved", "general"] = "course_only"
+    learning_outcomes: list[str] = Field(default_factory=list, max_length=20)
+    weekly_topics: list[str] = Field(default_factory=list, max_length=24)
+    tutor_instructions: str = Field(default="", max_length=3000)
+
+
+class ClassJoinRequest(BaseModel):
+    join_code: str = Field(min_length=4, max_length=16)
+
+
+class ClassPublic(BaseModel):
+    id: str
+    name: str
+    subject: str = ""
+    join_code: str = ""
+    student_count: int = 0
+    teacher_name: str = ""
+    knowledge_mode: Literal["course_only", "course_plus_approved", "general"] = "course_only"
+    learning_outcomes: list[str] = Field(default_factory=list)
+    weekly_topics: list[str] = Field(default_factory=list)
+    tutor_instructions: str = ""
+    created_at: str = ""
+
+
+class DashboardResponse(BaseModel):
+    role: str
+    summary: dict = Field(default_factory=dict)
+    classes: list[dict] = Field(default_factory=list)
+    recent_activity: list[dict] = Field(default_factory=list)
+    weak_topics: list[dict] = Field(default_factory=list)
+    students: list[dict] = Field(default_factory=list)
+    videos: list[dict] = Field(default_factory=list)
+    usage: list[dict] = Field(default_factory=list)
+    outcome_mastery: list[dict] = Field(default_factory=list)
+    common_misconceptions: list[dict] = Field(default_factory=list)
+    unanswered_questions: list[dict] = Field(default_factory=list)
+    interventions: list[dict] = Field(default_factory=list)
+    popular_questions: list[dict] = Field(default_factory=list)
+
+
+class LiveVideoRequest(BaseModel):
+    topic: str = Field(default="", max_length=300)
+    course: str = Field(default="", max_length=160)
+    level: str = Field(default="University", max_length=80)
+    audio_only: bool = False
+
+
+class LiveVideoResponse(BaseModel):
+    conversation_id: str
+    conversation_url: str
+    status: str
+    test_mode: bool = False
+
+
+class LessonVideoRequest(BaseModel):
+    topic: str = Field(min_length=2, max_length=300)
+    course: str = Field(default="", max_length=160)
+    level: str = Field(default="University", max_length=80)
+    length: Literal["short", "standard", "extended"] = "short"
+    class_id: str = Field(default="", max_length=64)
+    use_current_answer: bool = False
+    current_answer: str = Field(default="", max_length=16000)
+
+
+class LessonVideoPlan(BaseModel):
+    title: str = Field(default="Lesson video", max_length=180)
+    learning_objectives: list[str] = Field(default_factory=list, max_length=5)
+    script: str = Field(min_length=20, max_length=7000)
+    slides: list[VisualSlide] = Field(default_factory=list, max_length=8)
+    estimated_minutes: float = Field(default=2.0, ge=0.5, le=12)
+
+
+class LessonVideoResponse(BaseModel):
+    id: str
+    title: str
+    status: str
+    video_id: str = ""
+    hosted_url: str = ""
+    download_url: str = ""
+    stream_url: str = ""
+    script: str = ""
+    estimated_minutes: float = 0
+    provider: str = "lesson_package"
+
+
+class VisionAnalysis(BaseModel):
+    summary: str = Field(default="", max_length=1800)
+    visible_text: list[str] = Field(default_factory=list, max_length=20)
+    observations: list[str] = Field(default_factory=list, max_length=12)
+    possible_errors: list[str] = Field(default_factory=list, max_length=10)
+    uncertainties: list[str] = Field(default_factory=list, max_length=8)
+    annotations: list[VisualAnnotation] = Field(default_factory=list, max_length=8)
