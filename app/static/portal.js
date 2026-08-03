@@ -27,7 +27,7 @@
   const api = async (url, options = {}) => {
     const headers = new Headers(options.headers || {});
     if (options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-    const response = await fetch(url, { ...options, headers });
+    const response = await fetch(url, { ...options, headers, cache: options.cache || 'no-store' });
     let data = {};
     try { data = await response.json(); } catch {}
     if (!response.ok) throw new Error(data.detail || `Request failed (${response.status})`);
@@ -119,7 +119,7 @@
     }).join('');
     list.querySelectorAll('[data-teach-section]').forEach(button => button.addEventListener('click', () => teachSection(button.dataset.teachSection, button)));
     list.querySelectorAll('[data-delete-document]').forEach(button => button.addEventListener('click', event => {
-      event.preventDefault(); event.stopPropagation(); deleteDocument(button.dataset.classId, button.dataset.deleteDocument);
+      event.preventDefault(); event.stopPropagation(); deleteDocument(button.dataset.classId, button.dataset.deleteDocument, button);
     }));
   }
 
@@ -150,14 +150,23 @@
     }
   }
 
-  async function deleteDocument(classId, documentId) {
-    if (!confirm('Delete this course document, its subsections and all indexed extracts?')) return;
+  async function deleteDocument(classId, documentId, button = null) {
+    if (!classId || !documentId) return;
+    if (!confirm('Permanently delete this course document, all subsections and every indexed extract?')) return;
+    const previous = button?.textContent || 'Remove';
+    if (button) { button.disabled = true; button.textContent = 'Deleting…'; }
     try {
-      await api(`/api/classes/${encodeURIComponent(classId)}/documents/${encodeURIComponent(documentId)}`, { method: 'DELETE' });
+      const result = await api(`/api/classes/${encodeURIComponent(classId)}/documents/${encodeURIComponent(documentId)}`, { method: 'DELETE' });
+      document.querySelectorAll(`[data-delete-document="${CSS.escape(documentId)}"], [data-remove-inline-document="${CSS.escape(documentId)}"]`).forEach(node => node.closest('.course-document, .lecturer-document-row')?.remove());
       await loadCourseStructure(classId);
       await loadLecturerDocumentSummary(classId);
-      window.aiTutorLoadMaterials?.();
-    } catch (error) { alert(error.message); }
+      await window.aiTutorLoadMaterials?.();
+      const status = document.querySelector(`[data-document-manager="${CSS.escape(classId)}"] [data-course-document-status]`);
+      if (status) { status.textContent = `Document deleted. ${Number(result.deleted_chunks || 0)} indexed extract(s) removed.`; status.className = 'small-status success'; }
+    } catch (error) {
+      alert(error.message);
+      if (button) { button.disabled = false; button.textContent = previous; }
+    }
   }
 
   function applySelectedClass() {
@@ -381,7 +390,7 @@
     try {
       const data = await api('/api/admin/materials');
       container.innerHTML = adminMaterialRows(data.materials || []);
-      container.querySelectorAll('[data-delete-admin-material]').forEach(button => button.addEventListener('click', () => deleteAdminMaterial(button.dataset.deleteAdminMaterial)));
+      container.querySelectorAll('[data-delete-admin-material]').forEach(button => button.addEventListener('click', () => deleteAdminMaterial(button.dataset.deleteAdminMaterial, button)));
     } catch (error) { container.innerHTML = `<p class="practice-feedback error">${esc(error.message)}</p>`; }
   }
 
@@ -406,13 +415,20 @@
     finally { if (button) button.disabled = false; }
   }
 
-  async function deleteAdminMaterial(sourceId) {
-    if (!sourceId || !confirm('Delete this administrator document and all of its indexed extracts?')) return;
+  async function deleteAdminMaterial(sourceId, button = null) {
+    if (!sourceId || !confirm('Permanently delete this private administrator document and all indexed extracts?')) return;
+    const row = button?.closest('.admin-material-row');
+    const previous = button?.textContent || 'Delete';
+    if (button) { button.disabled = true; button.textContent = 'Deleting…'; }
     try {
-      await api(`/api/admin/materials?source_id=${encodeURIComponent(sourceId)}`, { method: 'DELETE' });
-      setStatus('adminMaterialStatus', 'Administrator document deleted.', 'success');
+      const result = await api(`/api/admin/materials?source_id=${encodeURIComponent(sourceId)}`, { method: 'DELETE' });
+      row?.remove();
+      setStatus('adminMaterialStatus', `Administrator document deleted. ${Number(result.deleted_chunks || 0)} indexed extract(s) removed.`, 'success');
       await loadAdminMaterials();
-    } catch (error) { setStatus('adminMaterialStatus', error.message, 'error'); }
+    } catch (error) {
+      if (button) { button.disabled = false; button.textContent = previous; }
+      setStatus('adminMaterialStatus', error.message, 'error');
+    }
   }
 
   function renderAdminDashboard(data) {
@@ -544,7 +560,7 @@
       const docs = data.documents || [];
       container.innerHTML = docs.length ? docs.map(doc => `<div class="lecturer-document-row"><div><strong>${esc(doc.title || doc.filename)}</strong><small>${documentTypeLabel(doc.document_type)} • ${(doc.sections || []).length} subsections</small></div><button type="button" data-remove-inline-document="${esc(doc.id)}" data-class-id="${esc(classId)}">Remove</button></div>`).join('') : '<p class="small-note">No teaching documents have been uploaded.</p>';
       container.querySelectorAll('[data-remove-inline-document]').forEach(button => button.addEventListener('click', async () => {
-        await deleteDocument(button.dataset.classId, button.dataset.removeInlineDocument);
+        await deleteDocument(button.dataset.classId, button.dataset.removeInlineDocument, button);
         await loadLecturerDocumentSummary(classId);
       }));
     } catch (error) { container.innerHTML = `<p class="practice-feedback error">${esc(error.message)}</p>`; }

@@ -122,7 +122,7 @@ function hideTyping() {
 }
 
 async function apiJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(url, { ...options, cache: options.cache || 'no-store' });
   let data;
   try { data = await response.json(); } catch { data = {}; }
   if (!response.ok) throw new Error(data.detail || `Request failed with status ${response.status}`);
@@ -155,10 +155,14 @@ async function loadConfig() {
 async function loadMaterials() {
   try {
     const classId = el('materialScope')?.value || el('classSelect')?.value || '';
-    const data = await apiJson(`/api/materials${classId ? `?class_id=${encodeURIComponent(classId)}` : ''}`);
     const list = el('materialList');
+    if (!classId) {
+      if (list) list.innerHTML = '<div class="material-item">Select a course to view only that lecturer-owned course repository.</div>';
+      return;
+    }
+    const data = await apiJson(`/api/materials?class_id=${encodeURIComponent(classId)}`);
     list.innerHTML = data.materials.length
-      ? data.materials.map(item => `<div class="material-item"><strong>${escapeHtml(item.source)}</strong><br><small>${escapeHtml((item.material_type || 'course').replace('_', ' '))} · ${item.chunks} extracts${item.class_id ? ' · class material' : ' · institution-wide'}</small></div>`).join('')
+      ? data.materials.map(item => `<div class="material-item"><strong>${escapeHtml(item.source)}</strong><br><small>${escapeHtml((item.material_type || 'course').replace('_', ' '))} · ${item.chunks} extracts · course-private</small></div>`).join('')
       : '<div class="material-item">No approved materials are available for this scope.</div>';
   } catch (error) {
     el('materialStatus').textContent = error.message;
