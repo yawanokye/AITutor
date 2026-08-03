@@ -76,7 +76,7 @@ Choose one method only.
 - [ ] Select **Clear build cache and deploy**.
 - [ ] Wait for the status to become **Live**.
 - [ ] Open `/health`.
-- [ ] Confirm `version` is `5.0.2`.
+- [ ] Confirm `version` is `5.0.3`.
 - [ ] Confirm the five new capability flags are `true`.
 - [ ] Refresh the browser with `Ctrl + Shift + R`.
 
@@ -146,3 +146,13 @@ Choose one method only.
 - [ ] Lecturer A cannot see Lecturer B's uploaded documents.
 - [ ] Deleting a lecturer document removes it from both course contents and indexed materials.
 - [ ] A student enrolled in two or more courses sees every enrolled course.
+
+## Effective v5.0.3 document verification
+
+- [ ] Open the Administrator Portal and confirm each private document has a Delete button.
+- [ ] Delete one older administrator upload and confirm the success message reports indexed extracts removed.
+- [ ] Sign in as a lecturer and confirm no administrator-private document appears.
+- [ ] Upload a document to Lecturer A's course and confirm Lecturer B cannot see it.
+- [ ] Delete a lecturer course document and confirm it disappears from both the course tree and course-material list.
+- [ ] Ask a question containing a unique phrase from the deleted document and confirm the source is no longer retrieved.
+- [ ] Confirm `/health` reports version `5.0.3`.

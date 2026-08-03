@@ -1,8 +1,8 @@
-# Anovlad Institutional AI Tutor v5.0.2
+# Anovlad Institutional AI Tutor v5.0.3
 
 A Render-ready, role-based AI learning platform for institutions. Version 5.0 separates administration, teaching and learning into dedicated portals and turns uploaded course documents into a structured, selectable AI tutoring environment.
 
-Version 5.0.2 adds strict document isolation, complete deletion of documents and indexed extracts, a private administrator repository, and an all-enrolled-courses view for students.
+Version 5.0.3 adds explicit repository ownership, automatic migration of legacy uploads, verified deletion of current and historical index records, cache-safe deployment, and an all-enrolled-courses view for students.
 
 ## What is new in v5.0
 
@@ -193,7 +193,7 @@ This release uses the existing Render PostgreSQL database. It does not create a 
 6. Add or confirm the environment variables below.
 7. Select **Manual Deploy**, then **Clear build cache and deploy**.
 8. Wait until the service is Live.
-9. Open `/health` and confirm version `5.0.2`.
+9. Open `/health` and confirm version `5.0.3`.
 10. Refresh the browser with `Ctrl + Shift + R`.
 
 Expected health fields include:
@@ -201,7 +201,7 @@ Expected health fields include:
 ```json
 {
   "status": "ok",
-  "version": "5.0.2",
+  "version": "5.0.3",
   "administrator_portal_enabled": true,
   "lecturer_managed_enrolment": true,
   "structured_course_content_enabled": true,
@@ -370,7 +370,7 @@ node --check app/static/practice_board.js
 pytest -q
 ```
 
-The supplied release passes 29 automated tests. External DeepSeek, OpenAI and optional Tavus calls require the institution's own API credentials and should be verified after deployment.
+The supplied release passes 32 automated tests. External DeepSeek, OpenAI and optional Tavus calls require the institution's own API credentials and should be verified after deployment.
 
 ## Security and scale
 
@@ -385,7 +385,7 @@ The supplied release passes 29 automated tests. External DeepSeek, OpenAI and op
 - Review institutional privacy, retention and AI-governance requirements before production use.
 
 
-## v5.0.2 document ownership and deletion
+## v5.0.3 document ownership and deletion
 
 - Administrator repository uploads remain private to administrators and are not mixed into lecturer courses.
 - Lecturers can upload and delete documents only inside courses they manage.
@@ -393,4 +393,4 @@ The supplied release passes 29 automated tests. External DeepSeek, OpenAI and op
 - Replacing a same-name document clears the old index before creating the new one.
 - Students see every course they have joined, including courses taught by different lecturers.
 
-See `V5_0_2_DOCUMENT_ISOLATION_AND_DELETION_FIX.md` for the focused upgrade notes.
+See `V5_0_3_EFFECTIVE_DOCUMENT_ISOLATION_FIX.md` for the current corrective upgrade notes. The v5.0.2 document is retained only as historical release information.
