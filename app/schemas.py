@@ -53,15 +53,19 @@ class DiagramEdge(BaseModel):
 
 
 class VisualSlide(BaseModel):
-    title: str = Field(default="", max_length=140)
-    bullets: list[str] = Field(default_factory=list, max_length=7)
-    equation: str = Field(default="", max_length=500)
-    speaker_note: str = Field(default="", max_length=500)
+    title: str = Field(default="", max_length=180)
+    bullets: list[str] = Field(default_factory=list, max_length=9)
+    equation: str = Field(default="", max_length=700)
+    explanation: str = Field(default="", max_length=1800)
+    worked_example: str = Field(default="", max_length=1400)
+    key_terms: list[str] = Field(default_factory=list, max_length=10)
+    check_question: str = Field(default="", max_length=700)
+    speaker_note: str = Field(default="", max_length=2200)
 
-    @field_validator("bullets", mode="after")
+    @field_validator("bullets", "key_terms", mode="after")
     @classmethod
     def trim_bullets(cls, values: list[str]) -> list[str]:
-        return [str(value)[:300] for value in values]
+        return [str(value)[:500] for value in values]
 
 
 class VisualPlan(BaseModel):
@@ -86,7 +90,7 @@ class VisualPlan(BaseModel):
     nodes: list[DiagramNode] = Field(default_factory=list, max_length=12)
     edges: list[DiagramEdge] = Field(default_factory=list, max_length=20)
     annotations: list[VisualAnnotation] = Field(default_factory=list, max_length=8)
-    slides: list[VisualSlide] = Field(default_factory=list, max_length=8)
+    slides: list[VisualSlide] = Field(default_factory=list, max_length=14)
 
     @field_validator("equations", "table_headers", mode="after")
     @classmethod
@@ -247,6 +251,8 @@ class UserPublic(BaseModel):
     email: str
     display_name: str
     role: Literal["student", "teacher", "admin"]
+    active: bool = True
+    must_change_password: bool = False
     created_at: str = ""
 
 
@@ -260,18 +266,22 @@ class ClassCreateRequest(BaseModel):
     name: str = Field(min_length=2, max_length=140)
     subject: str = Field(default="", max_length=160)
     knowledge_mode: Literal["course_only", "course_plus_approved", "general"] = "course_only"
-    learning_outcomes: list[str] = Field(default_factory=list, max_length=20)
-    weekly_topics: list[str] = Field(default_factory=list, max_length=24)
-    tutor_instructions: str = Field(default="", max_length=3000)
+    learning_outcomes: list[str] = Field(default_factory=list, max_length=30)
+    weekly_topics: list[str] = Field(default_factory=list, max_length=40)
+    recommended_readings: list[str] = Field(default_factory=list, max_length=60)
+    tutor_instructions: str = Field(default="", max_length=5000)
+    practice_whiteboard_required: bool = False
 
 
 class ClassProfileUpdateRequest(BaseModel):
     name: str = Field(default="", max_length=140)
     subject: str = Field(default="", max_length=160)
     knowledge_mode: Literal["course_only", "course_plus_approved", "general"] = "course_only"
-    learning_outcomes: list[str] = Field(default_factory=list, max_length=20)
-    weekly_topics: list[str] = Field(default_factory=list, max_length=24)
-    tutor_instructions: str = Field(default="", max_length=3000)
+    learning_outcomes: list[str] = Field(default_factory=list, max_length=30)
+    weekly_topics: list[str] = Field(default_factory=list, max_length=40)
+    recommended_readings: list[str] = Field(default_factory=list, max_length=60)
+    tutor_instructions: str = Field(default="", max_length=5000)
+    practice_whiteboard_required: bool = False
 
 
 class ClassJoinRequest(BaseModel):
@@ -288,7 +298,9 @@ class ClassPublic(BaseModel):
     knowledge_mode: Literal["course_only", "course_plus_approved", "general"] = "course_only"
     learning_outcomes: list[str] = Field(default_factory=list)
     weekly_topics: list[str] = Field(default_factory=list)
+    recommended_readings: list[str] = Field(default_factory=list)
     tutor_instructions: str = ""
+    practice_whiteboard_required: bool = False
     created_at: str = ""
 
 
@@ -299,6 +311,7 @@ class DashboardResponse(BaseModel):
     recent_activity: list[dict] = Field(default_factory=list)
     weak_topics: list[dict] = Field(default_factory=list)
     students: list[dict] = Field(default_factory=list)
+    lecturers: list[dict] = Field(default_factory=list)
     videos: list[dict] = Field(default_factory=list)
     usage: list[dict] = Field(default_factory=list)
     outcome_mastery: list[dict] = Field(default_factory=list)
@@ -336,7 +349,7 @@ class LessonVideoPlan(BaseModel):
     title: str = Field(default="Lesson video", max_length=180)
     learning_objectives: list[str] = Field(default_factory=list, max_length=5)
     script: str = Field(min_length=20, max_length=7000)
-    slides: list[VisualSlide] = Field(default_factory=list, max_length=8)
+    slides: list[VisualSlide] = Field(default_factory=list, max_length=14)
     estimated_minutes: float = Field(default=2.0, ge=0.5, le=12)
 
 
@@ -360,3 +373,97 @@ class VisionAnalysis(BaseModel):
     possible_errors: list[str] = Field(default_factory=list, max_length=10)
     uncertainties: list[str] = Field(default_factory=list, max_length=8)
     annotations: list[VisualAnnotation] = Field(default_factory=list, max_length=8)
+
+
+# v5.0 administrator, course hierarchy and detailed section teaching
+class AdminBootstrapRequest(BaseModel):
+    admin_key: str = Field(min_length=4, max_length=256)
+    display_name: str = Field(min_length=2, max_length=100)
+    email: str = Field(min_length=5, max_length=254)
+    password: str = Field(min_length=10, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def normalise_admin_email(cls, value: str) -> str:
+        clean = value.strip().lower()
+        if "@" not in clean:
+            raise ValueError("Enter a valid email address.")
+        return clean
+
+
+class AdminCreateLecturerRequest(BaseModel):
+    display_name: str = Field(min_length=2, max_length=100)
+    email: str = Field(min_length=5, max_length=254)
+    temporary_password: str = Field(default="", max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def normalise_lecturer_email(cls, value: str) -> str:
+        clean = value.strip().lower()
+        if "@" not in clean:
+            raise ValueError("Enter a valid email address.")
+        return clean
+
+
+class AdminLecturerResponse(BaseModel):
+    user: UserPublic
+    temporary_password: str = ""
+
+
+class AdminUserStatusRequest(BaseModel):
+    active: bool
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=10, max_length=128)
+
+
+class PasswordResetResponse(BaseModel):
+    temporary_password: str
+
+
+class CourseDocumentPublic(BaseModel):
+    id: str
+    class_id: str
+    title: str
+    filename: str
+    document_type: Literal["teaching_notes", "course_outline", "recommended_reading"]
+    objectives: list[str] = Field(default_factory=list)
+    recommended_readings: list[str] = Field(default_factory=list)
+    sections: list[dict] = Field(default_factory=list)
+    created_at: str = ""
+
+
+class SectionTeachRequest(BaseModel):
+    level: str = Field(default="University", max_length=80)
+    detail: Literal["standard", "detailed", "extended"] = "detailed"
+    include_worked_examples: bool = True
+    include_self_check: bool = True
+
+
+class LessonNoteBlock(BaseModel):
+    heading: str = Field(default="", max_length=180)
+    explanation: str = Field(default="", max_length=3000)
+    example: str = Field(default="", max_length=1800)
+    key_point: str = Field(default="", max_length=900)
+
+
+class SectionLessonPlan(BaseModel):
+    title: str = Field(default="Course section lesson", max_length=200)
+    learning_objectives: list[str] = Field(default_factory=list, max_length=8)
+    introduction: str = Field(default="", max_length=1800)
+    detailed_notes: list[LessonNoteBlock] = Field(default_factory=list, max_length=14)
+    key_terms: list[str] = Field(default_factory=list, max_length=16)
+    summary: str = Field(default="", max_length=1800)
+    self_check_questions: list[str] = Field(default_factory=list, max_length=8)
+    slides: list[VisualSlide] = Field(default_factory=list, max_length=14)
+
+
+class SectionTeachResponse(BaseModel):
+    section_id: str
+    section_title: str
+    answer: str
+    sources: list[str] = Field(default_factory=list)
+    visual: VisualPlan | None = None
+    practice_whiteboard_required: bool = False

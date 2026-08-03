@@ -99,13 +99,13 @@ Available kinds:
 - table: comparisons, classifications or organised values
 - diagram: labelled processes, concepts, systems, cycles or relationships
 - image_annotation: boxes and labels over the learner's uploaded image
-- slides: a short mini-lesson of two to six slides
+- slides: a detailed mini-lesson of four to ten slides
 - none: a visual would add little value
 
 Rules:
 1. {preference_rule}
 2. {image_rule}
-3. Keep it readable on a phone. Use no more than 7 steps, 5 graph series, 30 points per series, 8 table columns, 12 table rows, 10 diagram nodes, 16 edges, 8 annotations or 6 slides.
+3. Keep it readable on a phone. Use no more than 8 steps, 5 graph series, 30 points per series, 8 table columns, 12 table rows, 10 diagram nodes, 16 edges, 8 annotations or 10 slides. For slide lessons, use the explanation, worked_example, key_terms, check_question and speaker_note fields to teach rather than merely summarise.
 4. For equations, return LaTeX without surrounding dollar signs.
 5. Graph x and y values must be numeric. Sort points by x when a line should connect them.
 6. Diagram node positions use a 1000 by 1000 board. Keep nodes away from the outer 70 units.
@@ -163,10 +163,10 @@ Rules:
 
 def lesson_video_instructions(*, level: str, course: str, length: str) -> str:
     length_rule = {
-        "short": "Aim for about 90 seconds to 2 minutes and 3 to 5 slides.",
-        "standard": "Aim for about 3 to 5 minutes and 5 to 7 slides.",
-        "extended": "Aim for about 6 to 9 minutes and 6 to 8 slides.",
-    }.get(length, "Aim for about 2 minutes and 3 to 5 slides.")
+        "short": "Aim for about 2 to 3 minutes and 5 to 7 detailed slides.",
+        "standard": "Aim for about 5 to 8 minutes and 7 to 10 detailed slides.",
+        "extended": "Aim for about 9 to 15 minutes and 10 to 14 detailed slides.",
+    }.get(length, "Aim for about 5 minutes and 7 to 10 detailed slides.")
     return f"""
 Create a clear lesson-video plan for a learner at {level}. Course or subject: {course or 'Not specified'}.
 {length_rule}
@@ -175,7 +175,33 @@ Rules:
 1. The script must sound natural when spoken by a video tutor. Use British English.
 2. Begin with the learning purpose, teach the concept in a logical sequence, include one concrete example, and end with a brief self-check.
 3. Do not claim that the avatar is a human teacher. Do not include stage directions, markdown tables, URLs or source citations in the spoken script.
-4. Keep each slide simple enough to display behind a talking tutor. Use concise bullets and only essential equations.
-5. Avoid unsupported claims. Use the supplied course context as the primary grounding.
-6. Return valid JSON matching the requested schema.
+4. Each slide must teach, not merely list headings. Add a plain-language explanation, key terms and, where relevant, a worked example or equation.
+5. Include a brief check question on suitable slides and a speaker note that expands the slide into a detailed teaching explanation.
+6. Keep the visible bullets focused, but make explanation and speaker_note detailed enough for self-learning.
+7. Avoid unsupported claims. Use the supplied course context as the primary grounding.
+8. Return valid JSON matching the requested schema.
+""".strip()
+
+
+def section_lesson_instructions(*, level: str, course: str, detail: str) -> str:
+    detail_rule = {
+        "standard": "Create 6 to 8 slides and a clear but moderately detailed set of notes.",
+        "detailed": "Create 8 to 12 slides and detailed explanatory notes that can stand alone for self-learning.",
+        "extended": "Create 10 to 14 slides and an extended self-learning lesson with worked examples, misconceptions and self-checks.",
+    }.get(detail, "Create 8 to 12 slides and detailed self-learning notes.")
+    return f"""
+You are preparing a lecturer-approved AI lesson for a learner at {level}. Course: {course or 'Not specified'}.
+{detail_rule}
+
+Use the selected teaching-note subsection as the main authority. Use recommended readings only to clarify or extend ideas that are consistent with the teaching notes.
+
+Rules:
+1. Begin with focused learning objectives for this subsection.
+2. Build detailed notes in a logical sequence. Define terms, explain why ideas matter, show relationships and address likely misconceptions.
+3. Include worked examples when the content supports them. Do not invent numerical data, quotations, page numbers or references.
+4. Each slide must teach, not merely list headings. Add a concise explanation, essential bullets, a worked example where useful, key terms, one check question and detailed speaker notes.
+5. Slide content and detailed notes must be aligned. The speaker notes should explain how the lecturer or audio tutor presents the slide.
+6. Use British English and readable language appropriate to the learner's level.
+7. End with a summary and self-check questions. Do not include answers to self-check questions unless the selected text supplies them directly.
+8. Return valid JSON matching the requested schema.
 """.strip()

@@ -64,8 +64,14 @@ class Settings:
     # Accounts and dashboard.
     auth_secret: str = os.getenv("AUTH_SECRET", os.getenv("ADMIN_KEY", "change-this-auth-secret"))
     access_token_minutes: int = _int_env("ACCESS_TOKEN_MINUTES", 1440)
+    # Lecturer accounts are created by administrators in v5.0. The invitation code remains
+    # only for backward compatibility and is not used by public registration.
     teacher_invite_code: str = os.getenv("TEACHER_INVITE_CODE", "")
+    allow_public_teacher_registration: bool = _bool_env("ALLOW_PUBLIC_TEACHER_REGISTRATION", False)
     allow_student_registration: bool = _bool_env("ALLOW_STUDENT_REGISTRATION", True)
+    admin_email: str = os.getenv("ADMIN_EMAIL", "").strip().lower()
+    admin_password: str = os.getenv("ADMIN_PASSWORD", "")
+    admin_display_name: str = os.getenv("ADMIN_DISPLAY_NAME", "System Administrator")
     require_login_for_ai: bool = _bool_env("REQUIRE_LOGIN_FOR_AI", False)
     student_monthly_ai_budget_usd: float = _float_env("STUDENT_MONTHLY_AI_BUDGET_USD", 1.0)
     admin_key: str = os.getenv("ADMIN_KEY", "change-this-admin-key")
@@ -94,7 +100,7 @@ class Settings:
     allow_general_knowledge: bool = _bool_env("ALLOW_GENERAL_KNOWLEDGE", False)
     max_image_mb: int = _int_env("MAX_IMAGE_MB", 12)
     max_audio_mb: int = _int_env("MAX_AUDIO_MB", 20)
-    max_material_mb: int = _int_env("MAX_MATERIAL_MB", 15)
+    max_material_mb: int = _int_env("MAX_MATERIAL_MB", 30)
     history_turns: int = _int_env("HISTORY_TURNS", 8)
     rate_limit_per_minute: int = _int_env("RATE_LIMIT_PER_MINUTE", 30)
 

@@ -6,6 +6,8 @@ import json
 import html
 import logging
 import re
+import secrets
+import string
 import time
 import uuid
 from collections import defaultdict, deque
@@ -21,8 +23,10 @@ from starlette.concurrency import run_in_threadpool
 from app.accounts import AccountStore, AuthError, AuthManager
 from app.config import settings
 from app.knowledge import KnowledgeStore, extract_text, make_chunks
+from app.course_content import CourseContentStore, DOCUMENT_TYPES
 from app.prompts import (
     lesson_video_instructions,
+    section_lesson_instructions,
     practice_generation_instructions,
     practice_marking_instructions,
     tutor_instructions,
@@ -30,6 +34,10 @@ from app.prompts import (
     work_check_instructions,
 )
 from app.schemas import (
+    AdminBootstrapRequest,
+    AdminCreateLecturerRequest,
+    AdminLecturerResponse,
+    AdminUserStatusRequest,
     AuthResponse,
     ClassCreateRequest,
     ClassProfileUpdateRequest,
@@ -42,7 +50,12 @@ from app.schemas import (
     LiveVideoRequest,
     LiveVideoResponse,
     LoginRequest,
+    PasswordChangeRequest,
+    PasswordResetResponse,
     RegisterRequest,
+    SectionLessonPlan,
+    SectionTeachRequest,
+    SectionTeachResponse,
     UserPublic,
     VisionAnalysis,
     ChatResponse,
@@ -66,12 +79,27 @@ logger = logging.getLogger("ai_tutor")
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title=settings.app_name, version="4.0.0")
+app = FastAPI(title=settings.app_name, version="5.0.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 knowledge = KnowledgeStore(database_url=settings.database_url, storage_dir=settings.storage_dir)
 accounts = AccountStore(database_url=settings.database_url, storage_dir=settings.storage_dir)
+course_content = CourseContentStore(database_url=settings.database_url, storage_dir=settings.storage_dir)
 auth = AuthManager(secret=settings.auth_secret, access_token_minutes=settings.access_token_minutes)
+
+# Optional first administrator provisioned entirely through Render Environment.
+if settings.admin_email and settings.admin_password and not accounts.get_user_by_email(settings.admin_email):
+    try:
+        accounts.create_user(
+            email=settings.admin_email,
+            password_hash=auth.hash_password(settings.admin_password),
+            display_name=settings.admin_display_name,
+            role="admin",
+            active=True,
+            must_change_password=False,
+        )
+    except Exception:
+        logger.exception("The configured administrator account could not be provisioned")
 ai_router = AIProviderRouter(settings)
 tavus = TavusService(settings)
 client = ai_router.openai_client
@@ -166,13 +194,29 @@ def _required_user(request: Request) -> dict[str, Any]:
     user = accounts.get_user(str(payload.get("sub", "")))
     if not user:
         raise HTTPException(status_code=401, detail="Account not found.")
+    if not bool(user.get("active", True)):
+        raise HTTPException(status_code=403, detail="This account has been deactivated. Contact the administrator.")
     return user
 
 
 def _required_teacher(request: Request) -> dict[str, Any]:
     user = _required_user(request)
     if user.get("role") not in {"teacher", "admin"}:
-        raise HTTPException(status_code=403, detail="A teacher account is required.")
+        raise HTTPException(status_code=403, detail="A lecturer account is required.")
+    return user
+
+
+def _required_lecturer(request: Request) -> dict[str, Any]:
+    user = _required_user(request)
+    if user.get("role") != "teacher":
+        raise HTTPException(status_code=403, detail="A lecturer account is required.")
+    return user
+
+
+def _required_admin(request: Request) -> dict[str, Any]:
+    user = _required_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="An administrator account is required.")
     return user
 
 
@@ -205,6 +249,14 @@ def _record_usage(user: dict[str, Any] | None, result: Any, task: str) -> None:
 def _safe_filename(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._ -]+", "_", Path(name).name).strip()
     return cleaned[:180] or "material"
+
+
+def _temporary_password(length: int = 14) -> str:
+    alphabet = string.ascii_letters + string.digits + "!@#$%"
+    while True:
+        value = "".join(secrets.choice(alphabet) for _ in range(max(12, length)))
+        if any(c.islower() for c in value) and any(c.isupper() for c in value) and any(c.isdigit() for c in value):
+            return value
 
 
 def _base_media_type(content_type: str | None) -> str:
@@ -558,6 +610,11 @@ async def health() -> dict[str, Any]:
         "institutional_mode": settings.institutional_mode,
         "course_lock_enabled": settings.course_lock_enabled,
         "low_bandwidth_enabled": settings.low_bandwidth_enabled,
+        "administrator_portal_enabled": True,
+        "lecturer_managed_enrolment": True,
+        "structured_course_content_enabled": True,
+        "separate_practice_whiteboard_enabled": True,
+        "detailed_slide_teaching_enabled": True,
     }
 
 
@@ -957,6 +1014,7 @@ async def start_practice(
         "learning_outcome": str(learning["learning_outcome"]),
         "weekly_topic": str(learning["weekly_topic"]),
         "knowledge_mode": str(learning["knowledge_mode"]),
+        "practice_whiteboard_required": bool((learning.get("classroom") or {}).get("practice_whiteboard_required", False)),
         "level": level,
     }
     if user:
@@ -995,9 +1053,11 @@ async def check_practice_answer(
         return PracticeCheckResponse(correct=True, score_awarded=0, total_score=int(state.get("total_score", 0)), feedback="Practice is already complete.", attempts=0, completed=True)
     question = activity.questions[index]
     answer = answer.strip()
-    board = await _read_image(board_image, label="Learner's practice working on the whiteboard")
+    board = await _read_image(board_image, label="Learner's practice working on the practice whiteboard")
+    if bool(state.get("practice_whiteboard_required")) and not board:
+        raise HTTPException(status_code=422, detail="Your lecturer requires a handwritten whiteboard response for this practice question.")
     if not answer and not board:
-        raise HTTPException(status_code=422, detail="Enter an answer or attach your whiteboard working.")
+        raise HTTPException(status_code=422, detail="Enter an answer or attach your practice-whiteboard working.")
     attempts = int(state["attempts"].get(question.id, 0)) + 1
     state["attempts"][question.id] = attempts
     marking_text = (
@@ -1262,17 +1322,129 @@ async def speech(request: Request, payload: SpeechRequest) -> Response:
     return Response(content=audio_bytes, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
 
 
+def _section_plan_answer(plan: SectionLessonPlan) -> str:
+    parts: list[str] = [f"# {plan.title}"]
+    if plan.learning_objectives:
+        parts.append("## Learning objectives\n" + "\n".join(
+            f"{index}. {item}" for index, item in enumerate(plan.learning_objectives, 1)
+        ))
+    if plan.introduction:
+        parts.append("## Introduction\n" + plan.introduction)
+    for block in plan.detailed_notes:
+        heading = block.heading or "Detailed explanation"
+        text = f"## {heading}\n{block.explanation}".strip()
+        if block.example:
+            text += f"\n\n**Worked example or illustration:** {block.example}"
+        if block.key_point:
+            text += f"\n\n**Key point:** {block.key_point}"
+        parts.append(text)
+    if plan.key_terms:
+        parts.append("## Key terms\n" + "\n".join(f"- {item}" for item in plan.key_terms))
+    if plan.summary:
+        parts.append("## Summary\n" + plan.summary)
+    if plan.self_check_questions:
+        parts.append("## Check your understanding\n" + "\n".join(
+            f"{index}. {item}" for index, item in enumerate(plan.self_check_questions, 1)
+        ))
+    return "\n\n".join(part for part in parts if part.strip())
+
+
+def _demo_section_plan(title: str, content: str) -> SectionLessonPlan:
+    excerpt = re.sub(r"\s+", " ", content).strip()[:900] or "The lecturer's selected subsection will be explained here."
+    return SectionLessonPlan(
+        title=title,
+        learning_objectives=[f"Explain the main ideas in {title}", "Apply the ideas to a simple example"],
+        introduction=f"This demonstration lesson is grounded in the selected subsection, {title}.",
+        detailed_notes=[
+            {
+                "heading": "Core explanation",
+                "explanation": excerpt,
+                "example": "Connect the central idea to a familiar course example.",
+                "key_point": "Use the uploaded lecturer material as the main authority.",
+            },
+            {
+                "heading": "How to study this subsection",
+                "explanation": "Read the explanation, inspect the slide sequence, then answer the self-check questions or use the practice whiteboard.",
+                "example": "Write the method or concept in your own words.",
+                "key_point": "Active practice is more useful than passive reading.",
+            },
+        ],
+        key_terms=[title],
+        summary=f"The subsection introduces the main concepts and applications of {title}.",
+        self_check_questions=[f"What is the central idea of {title}?", "How would you apply it in one example?"],
+        slides=[
+            {
+                "title": title,
+                "bullets": ["Purpose of the subsection", "Main idea", "Expected learning"],
+                "explanation": excerpt[:600],
+                "speaker_note": "Introduce the learning purpose and relate it to the course objectives.",
+            },
+            {
+                "title": "Detailed explanation",
+                "bullets": ["Define the idea", "Show the relationship", "Address a likely misconception"],
+                "explanation": excerpt,
+                "worked_example": "Use a simple course-relevant example.",
+                "speaker_note": "Explain each point carefully and pause for the learner to reflect.",
+            },
+            {
+                "title": "Worked application",
+                "bullets": ["Identify what is given", "Apply the course method", "Interpret the result"],
+                "explanation": "Work through a course-relevant illustration one stage at a time and connect each stage to the lecturer's explanation.",
+                "worked_example": "Use the selected subsection to create a simple example, explain the method, and state what the result means.",
+                "key_terms": ["method", "application", "interpretation"],
+                "speaker_note": "Do not rush to the answer. Explain why each operation or conceptual link is appropriate.",
+            },
+            {
+                "title": "Common difficulty and correction",
+                "bullets": ["Recognise a likely misconception", "Contrast it with the correct idea", "Use an evidence-based correction"],
+                "explanation": "Clarify a misunderstanding that learners commonly develop when reading this subsection and show how the approved material resolves it.",
+                "check_question": "Which part of the explanation is easiest to misunderstand, and how would you correct it?",
+                "speaker_note": "Invite the learner to compare the incorrect and correct interpretations before continuing.",
+            },
+            {
+                "title": "Check your understanding",
+                "bullets": ["State the idea in your own words", "Give one application"],
+                "check_question": f"How would you explain {title} to another learner?",
+                "speaker_note": "Ask the learner to respond before displaying further practice.",
+            },
+        ],
+    )
+
+
 # Account, class, dashboard and reusable lesson endpoints
+
+@app.post("/api/admin/bootstrap", response_model=AuthResponse)
+async def bootstrap_administrator(payload: AdminBootstrapRequest) -> AuthResponse:
+    if not settings.admin_key or payload.admin_key != settings.admin_key:
+        raise HTTPException(status_code=403, detail="The administrator bootstrap key is incorrect.")
+    existing_admins = await run_in_threadpool(accounts.list_users, role="admin", limit=2)
+    if existing_admins:
+        raise HTTPException(status_code=409, detail="An administrator account already exists. Sign in through the administrator portal.")
+    try:
+        user = await run_in_threadpool(
+            accounts.create_user,
+            email=payload.email,
+            password_hash=auth.hash_password(payload.password),
+            display_name=payload.display_name,
+            role="admin",
+            active=True,
+            must_change_password=False,
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return AuthResponse(access_token=auth.issue_token(user), user=UserPublic(**accounts.public_user(user)))
+
 
 @app.post("/api/auth/register", response_model=AuthResponse)
 async def register_account(payload: RegisterRequest) -> AuthResponse:
+    if payload.role != "student":
+        if not settings.allow_public_teacher_registration:
+            raise HTTPException(status_code=403, detail="Lecturer accounts are created by an administrator.")
+        valid_teacher_code = bool(settings.teacher_invite_code) and payload.teacher_invite_code == settings.teacher_invite_code
+        if not valid_teacher_code:
+            raise HTTPException(status_code=403, detail="A valid lecturer invitation code is required.")
     if payload.role == "student" and not settings.allow_student_registration:
         raise HTTPException(status_code=403, detail="Student registration is currently closed.")
-    if payload.role == "teacher":
-        valid_teacher_code = bool(settings.teacher_invite_code) and payload.teacher_invite_code == settings.teacher_invite_code
-        valid_admin_code = bool(settings.admin_key) and payload.teacher_invite_code == settings.admin_key
-        if not (valid_teacher_code or valid_admin_code):
-            raise HTTPException(status_code=403, detail="A valid teacher invitation code is required.")
     try:
         password_hash = await run_in_threadpool(auth.hash_password, payload.password)
         user = await run_in_threadpool(
@@ -1281,6 +1453,8 @@ async def register_account(payload: RegisterRequest) -> AuthResponse:
             password_hash=password_hash,
             display_name=payload.display_name,
             role=payload.role,
+            active=True,
+            must_change_password=False,
         )
     except AuthError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1292,6 +1466,8 @@ async def login_account(payload: LoginRequest) -> AuthResponse:
     user = await run_in_threadpool(accounts.get_user_by_email, payload.email)
     if not user or not auth.verify_password(payload.password, str(user.get("password_hash", ""))):
         raise HTTPException(status_code=401, detail="Incorrect email address or password.")
+    if not bool(user.get("active", True)):
+        raise HTTPException(status_code=403, detail="This account has been deactivated. Contact the administrator.")
     await run_in_threadpool(accounts.touch_login, str(user["id"]))
     return AuthResponse(access_token=auth.issue_token(user), user=UserPublic(**accounts.public_user(user)))
 
@@ -1299,6 +1475,67 @@ async def login_account(payload: LoginRequest) -> AuthResponse:
 @app.get("/api/auth/me", response_model=UserPublic)
 async def current_account(request: Request) -> UserPublic:
     return UserPublic(**accounts.public_user(_required_user(request)))
+
+
+@app.post("/api/auth/change-password")
+async def change_password(request: Request, payload: PasswordChangeRequest) -> dict[str, str]:
+    user = _required_user(request)
+    if not auth.verify_password(payload.current_password, str(user.get("password_hash", ""))):
+        raise HTTPException(status_code=400, detail="The current password is incorrect.")
+    password_hash = await run_in_threadpool(auth.hash_password, payload.new_password)
+    await run_in_threadpool(accounts.update_password, user_id=str(user["id"]), password_hash=password_hash, must_change_password=False)
+    return {"status": "password_changed"}
+
+
+@app.get("/api/admin/lecturers", response_model=list[UserPublic])
+async def list_lecturers(request: Request) -> list[UserPublic]:
+    _required_admin(request)
+    rows = await run_in_threadpool(accounts.list_users, role="teacher", limit=2000)
+    return [UserPublic(**row) for row in rows]
+
+
+@app.post("/api/admin/lecturers", response_model=AdminLecturerResponse)
+async def create_lecturer(request: Request, payload: AdminCreateLecturerRequest) -> AdminLecturerResponse:
+    _required_admin(request)
+    temporary_password = payload.temporary_password.strip() or _temporary_password()
+    try:
+        password_hash = await run_in_threadpool(auth.hash_password, temporary_password)
+        user = await run_in_threadpool(
+            accounts.create_user,
+            email=payload.email,
+            password_hash=password_hash,
+            display_name=payload.display_name,
+            role="teacher",
+            active=True,
+            must_change_password=True,
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return AdminLecturerResponse(user=UserPublic(**accounts.public_user(user)), temporary_password=temporary_password)
+
+
+@app.patch("/api/admin/users/{user_id}/status", response_model=UserPublic)
+async def update_user_status(request: Request, user_id: str, payload: AdminUserStatusRequest) -> UserPublic:
+    admin = _required_admin(request)
+    if user_id == str(admin["id"]) and not payload.active:
+        raise HTTPException(status_code=400, detail="You cannot deactivate your own administrator account.")
+    try:
+        user = await run_in_threadpool(accounts.set_user_active, user_id=user_id, active=payload.active)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return UserPublic(**accounts.public_user(user))
+
+
+@app.post("/api/admin/users/{user_id}/reset-password", response_model=PasswordResetResponse)
+async def reset_user_password(request: Request, user_id: str) -> PasswordResetResponse:
+    _required_admin(request)
+    user = await run_in_threadpool(accounts.get_user, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    temporary_password = _temporary_password()
+    password_hash = await run_in_threadpool(auth.hash_password, temporary_password)
+    await run_in_threadpool(accounts.update_password, user_id=user_id, password_hash=password_hash, must_change_password=True)
+    return PasswordResetResponse(temporary_password=temporary_password)
 
 
 @app.get("/api/classes", response_model=list[ClassPublic])
@@ -1310,7 +1547,7 @@ async def list_classes(request: Request) -> list[ClassPublic]:
 
 @app.post("/api/classes", response_model=ClassPublic)
 async def create_class(request: Request, payload: ClassCreateRequest) -> ClassPublic:
-    user = _required_teacher(request)
+    user = _required_lecturer(request)
     row = await run_in_threadpool(
         accounts.create_class,
         teacher_id=str(user["id"]),
@@ -1319,14 +1556,16 @@ async def create_class(request: Request, payload: ClassCreateRequest) -> ClassPu
         knowledge_mode=payload.knowledge_mode,
         learning_outcomes=payload.learning_outcomes,
         weekly_topics=payload.weekly_topics,
+        recommended_readings=payload.recommended_readings,
         tutor_instructions=payload.tutor_instructions,
+        practice_whiteboard_required=payload.practice_whiteboard_required,
     )
     return ClassPublic(**row)
 
 
 @app.patch("/api/classes/{class_id}/profile", response_model=ClassPublic)
 async def update_class_profile(request: Request, class_id: str, payload: ClassProfileUpdateRequest) -> ClassPublic:
-    user = _required_teacher(request)
+    user = _required_lecturer(request)
     try:
         row = await run_in_threadpool(
             accounts.update_class_profile,
@@ -1337,7 +1576,23 @@ async def update_class_profile(request: Request, class_id: str, payload: ClassPr
             knowledge_mode=payload.knowledge_mode,
             learning_outcomes=payload.learning_outcomes,
             weekly_topics=payload.weekly_topics,
+            recommended_readings=payload.recommended_readings,
             tutor_instructions=payload.tutor_instructions,
+            practice_whiteboard_required=payload.practice_whiteboard_required,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ClassPublic(**row)
+
+
+@app.post("/api/classes/{class_id}/regenerate-code", response_model=ClassPublic)
+async def regenerate_class_code(request: Request, class_id: str) -> ClassPublic:
+    user = _required_lecturer(request)
+    try:
+        row = await run_in_threadpool(
+            accounts.regenerate_join_code,
+            class_id=class_id,
+            teacher_id=str(user["id"]),
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1518,18 +1773,142 @@ async def lesson_background(job_id: str, token: str = "") -> HTMLResponse:
     if not job:
         raise HTTPException(status_code=404, detail="Lesson background not found.")
     visual = job.get("visual") or {}
-    slides = visual.get("slides") or [{"title": job.get("title", "Lesson"), "bullets": [job.get("topic", "")], "equation": ""}]
+    slides = visual.get("slides") or [{
+        "title": job.get("title", "Lesson"), "bullets": [job.get("topic", "")],
+        "equation": "", "explanation": "", "worked_example": "", "key_terms": [],
+        "check_question": "", "speaker_note": ""
+    }]
     slides_json = json.dumps(slides, ensure_ascii=False).replace("</", "<\\/")
     safe_title = html.escape(str(job.get("title", "Lesson")))
-    page = (
-        "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>{safe_title}</title><style>html,body{{margin:0;height:100%;font-family:Arial,sans-serif;background:#eef6f3;color:#123}}"
-        "body{display:grid;place-items:center}.slide{width:88vw;height:76vh;background:white;border-radius:28px;padding:5vw;box-shadow:0 20px 60px #1233;display:flex;flex-direction:column;justify-content:center}"
-        "h1{font-size:4.5vw;margin:0 0 2vw;color:#0b5d4b}li{font-size:2.25vw;margin:1vw 0;line-height:1.35}.eq{font-size:3vw;margin-top:2vw;text-align:center;background:#f4f0df;padding:1.5vw;border-radius:16px}.counter{position:fixed;right:4vw;bottom:3vw;font-size:1.3vw}</style></head>"
-        "<body><main class='slide'><h1 id='title'></h1><ul id='bullets'></ul><div id='eq' class='eq'></div></main><div id='counter' class='counter'></div>"
-        f"<script>const slides={slides_json};let i=0;function esc(x){{return String(x).replace(/[&<>]/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;'}}[c]))}}function show(){{const s=slides[i]||{{}};document.getElementById('title').textContent=s.title||'';document.getElementById('bullets').innerHTML=(s.bullets||[]).map(x=>'<li>'+esc(x)+'</li>').join('');const e=document.getElementById('eq');e.textContent=s.equation||'';e.style.display=s.equation?'block':'none';document.getElementById('counter').textContent=(i+1)+' / '+slides.length}}show();setInterval(()=>{{i=(i+1)%slides.length;show()}},9000);</script></body></html>"
-    )
+    page = f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>{safe_title}</title><style>
+html,body{{margin:0;min-height:100%;font-family:Arial,sans-serif;background:#eef6f3;color:#123}}
+body{{display:grid;place-items:center;padding:2vh 2vw;box-sizing:border-box}}
+.slide{{width:min(1180px,92vw);min-height:82vh;background:white;border-radius:28px;padding:3.5vw;box-shadow:0 20px 60px #1233;display:flex;flex-direction:column;overflow:auto;box-sizing:border-box}}
+h1{{font-size:clamp(30px,4vw,58px);margin:0 0 1.4rem;color:#0b5d4b}}
+li,p{{font-size:clamp(18px,1.7vw,28px);line-height:1.45}}li{{margin:.45rem 0}}
+.eq{{font-size:clamp(22px,2.4vw,38px);margin:1rem 0;text-align:center;background:#f4f0df;padding:1rem;border-radius:16px}}
+.block{{padding:1rem 1.2rem;margin:.6rem 0;border-radius:14px;background:#eff8f5;border-left:5px solid #0b5d4b}}
+.example{{background:#f4f0ff;border-left-color:#6848a8}}.check{{background:#fff7e6;border-left-color:#b27610}}
+.terms span{{display:inline-block;background:#e8f0ff;padding:.35rem .65rem;border-radius:999px;margin:.2rem}}
+.note{{font-size:clamp(15px,1.25vw,21px);color:#52635d;border-top:1px solid #dce8e3;padding-top:1rem}}
+.counter{{position:fixed;right:4vw;bottom:2vw;font-size:1rem;background:#fff;padding:.45rem .75rem;border-radius:999px}}
+</style></head><body><main class='slide'><h1 id='title'></h1><ul id='bullets'></ul><div id='eq' class='eq'></div><div id='explanation' class='block'></div><div id='example' class='block example'></div><div id='terms' class='terms'></div><div id='check' class='block check'></div><p id='note' class='note'></p></main><div id='counter' class='counter'></div>
+<script>const slides={slides_json};let i=0;function esc(x){{return String(x??'').replace(/[&<>]/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;'}}[c]))}}function fill(id,text){{const e=document.getElementById(id);e.textContent=text||'';e.style.display=text?'block':'none'}}function show(){{const s=slides[i]||{{}};document.getElementById('title').textContent=s.title||'';document.getElementById('bullets').innerHTML=(s.bullets||[]).map(x=>'<li>'+esc(x)+'</li>').join('');fill('eq',s.equation);fill('explanation',s.explanation);fill('example',s.worked_example);const terms=document.getElementById('terms');terms.innerHTML=(s.key_terms||[]).map(x=>'<span>'+esc(x)+'</span>').join('');terms.style.display=(s.key_terms||[]).length?'block':'none';fill('check',s.check_question);fill('note',s.speaker_note);document.getElementById('counter').textContent=(i+1)+' / '+slides.length}}show();setInterval(()=>{{i=(i+1)%slides.length;show()}},14000);</script></body></html>"""
     return HTMLResponse(page, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/classes/{class_id}/course-structure")
+async def course_structure(request: Request, class_id: str) -> dict[str, Any]:
+    user = _required_user(request)
+    classroom = await run_in_threadpool(
+        accounts.class_for_user, class_id=class_id, user_id=str(user["id"]), role=str(user["role"])
+    )
+    if not classroom:
+        raise HTTPException(status_code=403, detail="You do not have access to this course.")
+    documents = await run_in_threadpool(course_content.list_structure, class_id)
+    return {"classroom": classroom, "documents": documents}
+
+
+@app.post("/api/course/sections/{section_id}/teach", response_model=SectionTeachResponse)
+async def teach_course_section(request: Request, section_id: str, payload: SectionTeachRequest) -> SectionTeachResponse:
+    _check_rate_limit(request)
+    user = _ai_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Sign in to open a course subsection.")
+    section = await run_in_threadpool(course_content.get_section, section_id)
+    if not section:
+        raise HTTPException(status_code=404, detail="The selected course subsection was not found.")
+    class_id = str(section.get("class_id", ""))
+    classroom = await run_in_threadpool(
+        accounts.class_for_user, class_id=class_id, user_id=str(user["id"]), role=str(user["role"])
+    )
+    if not classroom:
+        raise HTTPException(status_code=403, detail="You do not have access to this course subsection.")
+    selected_text = str(section.get("content", "")).strip()
+    if not selected_text:
+        raise HTTPException(status_code=422, detail="This subsection does not contain readable teaching text.")
+    reading_context, reading_sources = await run_in_threadpool(course_content.recommended_context, class_id)
+    listed_readings = [str(item) for item in classroom.get("recommended_readings", [])]
+    sources = list(dict.fromkeys([
+        str(section.get("filename", "Course material")),
+        *[item for item in reading_sources if item],
+    ]))
+    course_name = str(classroom.get("subject") or classroom.get("name") or "Course")
+    objectives_text = "\n".join(f"- {item}" for item in classroom.get("learning_outcomes", []))
+    reading_list_text = "\n".join(f"- {item}" for item in listed_readings)
+    prompt = (
+        f"COURSE\n{course_name}\n\n"
+        f"COURSE LEARNING OBJECTIVES\n{objectives_text or 'No objectives were extracted.'}\n\n"
+        f"SELECTED DOCUMENT\n{section.get('document_title', '')} [{section.get('filename', '')}]\n\n"
+        f"SELECTED SUBSECTION\n{section.get('section_path') or section.get('title')}\n\n"
+        f"LECTURER TEACHING TEXT\n{selected_text[:50000]}\n\n"
+        f"RECOMMENDED READING LIST\n{reading_list_text or 'No reading list was extracted.'}\n\n"
+        f"APPROVED READING EXTRACTS\n{reading_context[:18000] or 'No approved reading extract was uploaded.'}\n\n"
+        f"LECTURER INSTRUCTIONS\n{classroom.get('tutor_instructions') or 'No additional instructions.'}"
+    )
+    if settings.demo_mode:
+        plan = _demo_section_plan(str(section.get("title", "Course subsection")), selected_text)
+    else:
+        _require_text_ai()
+        try:
+            result = await run_in_threadpool(
+                ai_router.generate_structured,
+                schema=SectionLessonPlan,
+                instructions=section_lesson_instructions(
+                    level=payload.level, course=course_name, detail=payload.detail
+                ),
+                prompt=prompt,
+                task="course_section_lesson",
+                max_tokens=max(settings.deepseek_max_tokens, 7000),
+                prefer_deepseek=True,
+            )
+            plan = result.value if isinstance(result.value, SectionLessonPlan) else SectionLessonPlan.model_validate(result.value)
+            _record_usage(user, result, "course_section_lesson")
+        except Exception as exc:
+            logger.exception("Course subsection lesson generation failed")
+            raise HTTPException(
+                status_code=502, detail=f"Course subsection lesson error: {type(exc).__name__}"
+            ) from exc
+    if not payload.include_worked_examples:
+        for block in plan.detailed_notes:
+            block.example = ""
+        for slide in plan.slides:
+            slide.worked_example = ""
+    if not payload.include_self_check:
+        plan.self_check_questions = []
+        for slide in plan.slides:
+            slide.check_question = ""
+    answer = _section_plan_answer(plan)
+    visual = VisualPlan(
+        kind="slides",
+        title=plan.title,
+        caption="Detailed lecturer-grounded slides. Use Previous and Next, or select Teach step by step for narrated teaching.",
+        slides=plan.slides,
+    )
+    try:
+        await run_in_threadpool(
+            accounts.record_learning_event,
+            user_id=str(user["id"]),
+            class_id=class_id,
+            event_type="course_section_opened",
+            topic=str(section.get("section_path") or section.get("title")),
+            metadata={
+                "section_id": section_id,
+                "document": section.get("filename", ""),
+                "detail": payload.detail,
+            },
+        )
+    except Exception:
+        logger.exception("Course subsection activity could not be recorded")
+    return SectionTeachResponse(
+        section_id=section_id,
+        section_title=str(section.get("title", "Course subsection")),
+        answer=answer,
+        sources=sources,
+        visual=visual,
+        practice_whiteboard_required=bool(classroom.get("practice_whiteboard_required", False)),
+    )
 
 
 @app.get("/api/materials")
@@ -1545,7 +1924,8 @@ async def list_materials(request: Request, class_id: str = "") -> dict[str, Any]
     materials = await run_in_threadpool(
         knowledge.list_sources, class_id=class_id if class_id else None, include_global=True
     )
-    return {"materials": materials}
+    documents = await run_in_threadpool(course_content.list_structure, class_id) if class_id else []
+    return {"materials": materials, "documents": documents}
 
 
 @app.post("/api/materials/upload")
@@ -1554,54 +1934,122 @@ async def upload_materials(
     admin_key: str = Form(default=""),
     class_id: str = Form(default=""),
     material_type: str = Form(default="course"),
+    document_type: str = Form(default="teaching_notes"),
     files: list[UploadFile] = File(...),
 ) -> dict[str, Any]:
     _check_rate_limit(request)
     class_id = class_id.strip()
-    material_type = material_type if material_type in {"course", "approved_external"} else "course"
+    document_type = document_type if document_type in DOCUMENT_TYPES else "teaching_notes"
+    material_type = "approved_external" if document_type == "recommended_reading" else "course"
     user = _optional_user(request)
+    classroom = None
     authorised = False
-    if class_id and user:
+    if class_id and user and user.get("role") == "teacher":
         classroom = await run_in_threadpool(
-            accounts.class_for_user, class_id=class_id, user_id=str(user["id"]), role=str(user["role"])
+            accounts.class_for_user, class_id=class_id, user_id=str(user["id"]), role="teacher"
         )
-        authorised = bool(classroom and user.get("role") in {"teacher", "admin"})
+        authorised = bool(classroom)
     elif not class_id:
         authorised = bool(settings.admin_key and admin_key == settings.admin_key)
     if not authorised:
         raise HTTPException(
             status_code=401,
-            detail="A teacher account is required for class materials, or use the administrator key for global materials.",
+            detail="Lecturers can upload documents only to courses they manage. Use the administrator key only for institution-wide material.",
         )
     if not files:
         raise HTTPException(status_code=422, detail="Select at least one course-material file.")
 
     uploaded: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
-    for file in files[:10]:
+    for file in files[:12]:
         filename = _safe_filename(file.filename or "material")
-        internal_source = f"{class_id or 'global'}::{material_type}::{filename}"
         try:
             data = await file.read()
             if len(data) > settings.max_material_mb * 1024 * 1024:
                 raise ValueError(f"File exceeds {settings.max_material_mb} MB")
-            text = await run_in_threadpool(extract_text, filename, data)
-            chunks = await run_in_threadpool(
-                make_chunks, text, internal_source, class_id=class_id, material_type=material_type, display_source=filename
-            )
-            if not chunks:
-                raise ValueError("No readable text was found. A scanned PDF may need OCR before upload.")
-            count = await run_in_threadpool(knowledge.replace_source, internal_source, chunks)
-            uploaded.append({
-                "source": filename, "chunks": count, "class_id": class_id, "material_type": material_type
-            })
+            if class_id:
+                document = await run_in_threadpool(
+                    course_content.ingest_document,
+                    class_id=class_id,
+                    uploader_id=str(user["id"]),
+                    filename=filename,
+                    document_type=document_type,
+                    data=data,
+                )
+                internal_source = f"{class_id}::{document_type}::{document['id']}"
+                all_chunks = []
+                chunk_index = 0
+                for section_meta in document.get("sections", []):
+                    section = await run_in_threadpool(course_content.get_section, section_meta["id"])
+                    if not section or not str(section.get("content", "")).strip():
+                        continue
+                    section_chunks = await run_in_threadpool(
+                        make_chunks,
+                        str(section["content"]),
+                        internal_source,
+                        class_id=class_id,
+                        material_type=material_type,
+                        display_source=f"{filename} • {section.get('section_path') or section.get('title')}",
+                    )
+                    for chunk in section_chunks:
+                        chunk.chunk_index = chunk_index
+                        chunk_index += 1
+                        all_chunks.append(chunk)
+                if not all_chunks:
+                    raise ValueError("No readable text was found. A scanned PDF may need OCR before upload.")
+                count = await run_in_threadpool(knowledge.replace_source, internal_source, all_chunks)
+                if document_type == "course_outline":
+                    classroom = await run_in_threadpool(
+                        accounts.merge_course_outline,
+                        class_id=class_id,
+                        teacher_id=str(user["id"]),
+                        objectives=document.get("objectives", []),
+                        recommended_readings=document.get("recommended_readings", []),
+                    )
+                uploaded.append({
+                    "source": filename,
+                    "chunks": count,
+                    "class_id": class_id,
+                    "material_type": material_type,
+                    "document_type": document_type,
+                    "document_id": document.get("id", ""),
+                    "sections": len(document.get("sections", [])),
+                    "objectives_found": len(document.get("objectives", [])),
+                    "readings_found": len(document.get("recommended_readings", [])),
+                })
+            else:
+                text = await run_in_threadpool(extract_text, filename, data)
+                internal_source = f"global::{material_type}::{filename}"
+                chunks = await run_in_threadpool(
+                    make_chunks, text, internal_source, class_id="", material_type=material_type, display_source=filename
+                )
+                if not chunks:
+                    raise ValueError("No readable text was found. A scanned PDF may need OCR before upload.")
+                count = await run_in_threadpool(knowledge.replace_source, internal_source, chunks)
+                uploaded.append({"source": filename, "chunks": count, "class_id": "", "material_type": material_type})
         except Exception as exc:
+            logger.exception("Course document upload failed for %s", filename)
             errors.append({"source": filename, "error": str(exc)})
 
     materials = await run_in_threadpool(
         knowledge.list_sources, class_id=class_id if class_id else None, include_global=True
     )
-    return {"uploaded": uploaded, "errors": errors, "materials": materials}
+    documents = await run_in_threadpool(course_content.list_structure, class_id) if class_id else []
+    return {"uploaded": uploaded, "errors": errors, "materials": materials, "documents": documents, "classroom": classroom}
+
+
+@app.delete("/api/classes/{class_id}/documents/{document_id}")
+async def delete_course_document(request: Request, class_id: str, document_id: str) -> dict[str, str]:
+    user = _required_lecturer(request)
+    classroom = await run_in_threadpool(
+        accounts.class_for_user, class_id=class_id, user_id=str(user["id"]), role="teacher"
+    )
+    if not classroom:
+        raise HTTPException(status_code=403, detail="You do not manage this course.")
+    deleted = await run_in_threadpool(course_content.delete_document, document_id, class_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Course document not found.")
+    return {"status": "deleted"}
 
 
 @app.delete("/api/session/{session_id}")

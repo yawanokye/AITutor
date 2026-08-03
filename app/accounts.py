@@ -151,6 +151,8 @@ class AccountStore:
                     password_hash TEXT NOT NULL,
                     display_name TEXT NOT NULL,
                     role TEXT NOT NULL CHECK (role IN ('student','teacher','admin')),
+                    active BOOLEAN NOT NULL DEFAULT TRUE,
+                    must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     last_login TIMESTAMPTZ
                 )
@@ -165,7 +167,9 @@ class AccountStore:
                     knowledge_mode TEXT NOT NULL DEFAULT 'course_only',
                     learning_outcomes JSONB NOT NULL DEFAULT '[]'::jsonb,
                     weekly_topics JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    recommended_readings JSONB NOT NULL DEFAULT '[]'::jsonb,
                     tutor_instructions TEXT NOT NULL DEFAULT '',
+                    practice_whiteboard_required BOOLEAN NOT NULL DEFAULT FALSE,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
                 """,
@@ -247,7 +251,11 @@ class AccountStore:
                 "ALTER TABLE ai_tutor_classes ADD COLUMN IF NOT EXISTS knowledge_mode TEXT NOT NULL DEFAULT 'course_only'",
                 "ALTER TABLE ai_tutor_classes ADD COLUMN IF NOT EXISTS learning_outcomes JSONB NOT NULL DEFAULT '[]'::jsonb",
                 "ALTER TABLE ai_tutor_classes ADD COLUMN IF NOT EXISTS weekly_topics JSONB NOT NULL DEFAULT '[]'::jsonb",
+                "ALTER TABLE ai_tutor_users ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE",
+                "ALTER TABLE ai_tutor_users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE",
+                "ALTER TABLE ai_tutor_classes ADD COLUMN IF NOT EXISTS recommended_readings JSONB NOT NULL DEFAULT '[]'::jsonb",
                 "ALTER TABLE ai_tutor_classes ADD COLUMN IF NOT EXISTS tutor_instructions TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE ai_tutor_classes ADD COLUMN IF NOT EXISTS practice_whiteboard_required BOOLEAN NOT NULL DEFAULT FALSE",
                 "CREATE INDEX IF NOT EXISTS idx_ai_tutor_events_user_created ON ai_tutor_learning_events(user_id, created_at DESC)",
                 "CREATE INDEX IF NOT EXISTS idx_ai_tutor_members_student ON ai_tutor_class_members(student_id)",
                 "CREATE INDEX IF NOT EXISTS idx_ai_tutor_usage_user_created ON ai_tutor_usage_events(user_id, created_at DESC)",
@@ -262,13 +270,15 @@ class AccountStore:
         schema = """
         CREATE TABLE IF NOT EXISTS ai_tutor_users (
             id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,
-            display_name TEXT NOT NULL, role TEXT NOT NULL, created_at TEXT NOT NULL, last_login TEXT
+            display_name TEXT NOT NULL, role TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1,
+            must_change_password INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, last_login TEXT
         );
         CREATE TABLE IF NOT EXISTS ai_tutor_classes (
             id TEXT PRIMARY KEY, teacher_id TEXT NOT NULL, name TEXT NOT NULL, subject TEXT NOT NULL DEFAULT '',
             join_code TEXT UNIQUE NOT NULL, knowledge_mode TEXT NOT NULL DEFAULT 'course_only',
             learning_outcomes TEXT NOT NULL DEFAULT '[]', weekly_topics TEXT NOT NULL DEFAULT '[]',
-            tutor_instructions TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+            recommended_readings TEXT NOT NULL DEFAULT '[]', tutor_instructions TEXT NOT NULL DEFAULT '',
+            practice_whiteboard_required INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
             FOREIGN KEY(teacher_id) REFERENCES ai_tutor_users(id) ON DELETE CASCADE
         );
         CREATE TABLE IF NOT EXISTS ai_tutor_class_members (
@@ -321,11 +331,18 @@ class AccountStore:
                 "knowledge_mode": "TEXT NOT NULL DEFAULT 'course_only'",
                 "learning_outcomes": "TEXT NOT NULL DEFAULT '[]'",
                 "weekly_topics": "TEXT NOT NULL DEFAULT '[]'",
+                "recommended_readings": "TEXT NOT NULL DEFAULT '[]'",
                 "tutor_instructions": "TEXT NOT NULL DEFAULT ''",
+                "practice_whiteboard_required": "INTEGER NOT NULL DEFAULT 0",
             }
             for column, definition in migrations.items():
                 if column not in existing:
                     conn.execute(f"ALTER TABLE ai_tutor_classes ADD COLUMN {column} {definition}")
+            user_existing = {row[1] for row in conn.execute("PRAGMA table_info(ai_tutor_users)").fetchall()}
+            if "active" not in user_existing:
+                conn.execute("ALTER TABLE ai_tutor_users ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+            if "must_change_password" not in user_existing:
+                conn.execute("ALTER TABLE ai_tutor_users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
             conn.commit()
 
     @staticmethod
@@ -335,6 +352,8 @@ class AccountStore:
             "email": str(row["email"]),
             "display_name": str(row["display_name"]),
             "role": str(row["role"]),
+            "active": bool(row.get("active", True) if isinstance(row, dict) else row["active"]),
+            "must_change_password": bool(row.get("must_change_password", False) if isinstance(row, dict) else row["must_change_password"]),
             "created_at": _iso(row["created_at"]),
         }
 
@@ -359,7 +378,10 @@ class AccountStore:
             row = conn.execute("SELECT * FROM ai_tutor_users WHERE email=?", (email,)).fetchone()
             return dict(row) if row else None
 
-    def create_user(self, *, email: str, password_hash: str, display_name: str, role: str) -> dict[str, Any]:
+    def create_user(
+        self, *, email: str, password_hash: str, display_name: str, role: str,
+        active: bool = True, must_change_password: bool = False
+    ) -> dict[str, Any]:
         user_id = str(uuid.uuid4())
         email = email.strip().lower()
         display_name = " ".join(display_name.split())[:100]
@@ -368,16 +390,16 @@ class AccountStore:
             if self._use_postgres:
                 with self._pg() as conn, conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO ai_tutor_users(id,email,password_hash,display_name,role,created_at) VALUES(%s,%s,%s,%s,%s,%s) RETURNING *",
-                        (user_id, email, password_hash, display_name, role, now),
+                        "INSERT INTO ai_tutor_users(id,email,password_hash,display_name,role,active,must_change_password,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+                        (user_id, email, password_hash, display_name, role, active, must_change_password, now),
                     )
                     row = dict(cur.fetchone())
                     conn.commit()
                     return row
             with self._lock, self._sqlite() as conn:
                 conn.execute(
-                    "INSERT INTO ai_tutor_users(id,email,password_hash,display_name,role,created_at) VALUES(?,?,?,?,?,?)",
-                    (user_id, email, password_hash, display_name, role, now.isoformat()),
+                    "INSERT INTO ai_tutor_users(id,email,password_hash,display_name,role,active,must_change_password,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                    (user_id, email, password_hash, display_name, role, int(active), int(must_change_password), now.isoformat()),
                 )
                 conn.commit()
             return self.get_user(user_id) or {}
@@ -397,6 +419,114 @@ class AccountStore:
             conn.execute("UPDATE ai_tutor_users SET last_login=? WHERE id=?", (now.isoformat(), user_id))
             conn.commit()
 
+    def list_users(self, *, role: str | None = None, limit: int = 1000) -> list[dict[str, Any]]:
+        params: tuple[Any, ...] = ()
+        where = ""
+        if role:
+            where = " WHERE role={placeholder}"
+            params = (role,)
+        sql = f"SELECT * FROM ai_tutor_users{{where}} ORDER BY created_at DESC LIMIT {{limit_placeholder}}"
+        if self._use_postgres:
+            with self._pg() as conn, conn.cursor() as cur:
+                cur.execute(sql.format(where=where.format(placeholder="%s") if where else "", limit_placeholder="%s"), (*params, limit))
+                return [self.public_user(dict(row)) for row in cur.fetchall()]
+        with self._lock, self._sqlite() as conn:
+            rows = conn.execute(sql.format(where=where.format(placeholder="?") if where else "", limit_placeholder="?"), (*params, limit)).fetchall()
+            return [self.public_user(row) for row in rows]
+
+    def set_user_active(self, *, user_id: str, active: bool) -> dict[str, Any]:
+        if self._use_postgres:
+            with self._pg() as conn, conn.cursor() as cur:
+                cur.execute("UPDATE ai_tutor_users SET active=%s WHERE id=%s RETURNING *", (active, user_id))
+                row = cur.fetchone()
+                conn.commit()
+                if not row:
+                    raise ValueError("Account not found.")
+                return dict(row)
+        with self._lock, self._sqlite() as conn:
+            cur = conn.execute("UPDATE ai_tutor_users SET active=? WHERE id=?", (int(active), user_id))
+            if cur.rowcount == 0:
+                raise ValueError("Account not found.")
+            conn.commit()
+        return self.get_user(user_id) or {}
+
+    def update_password(self, *, user_id: str, password_hash: str, must_change_password: bool = False) -> None:
+        if self._use_postgres:
+            with self._pg() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE ai_tutor_users SET password_hash=%s,must_change_password=%s WHERE id=%s",
+                    (password_hash, must_change_password, user_id),
+                )
+                if cur.rowcount == 0:
+                    raise ValueError("Account not found.")
+                conn.commit()
+            return
+        with self._lock, self._sqlite() as conn:
+            cur = conn.execute(
+                "UPDATE ai_tutor_users SET password_hash=?,must_change_password=? WHERE id=?",
+                (password_hash, int(must_change_password), user_id),
+            )
+            if cur.rowcount == 0:
+                raise ValueError("Account not found.")
+            conn.commit()
+
+    def regenerate_join_code(self, *, class_id: str, teacher_id: str) -> dict[str, Any]:
+        for _ in range(8):
+            join_code = self._new_join_code()
+            try:
+                if self._use_postgres:
+                    with self._pg() as conn, conn.cursor() as cur:
+                        cur.execute(
+                            "UPDATE ai_tutor_classes SET join_code=%s WHERE id=%s AND teacher_id=%s",
+                            (join_code, class_id, teacher_id),
+                        )
+                        if cur.rowcount == 0:
+                            raise ValueError("Class not found or you do not manage it.")
+                        conn.commit()
+                else:
+                    with self._lock, self._sqlite() as conn:
+                        cur = conn.execute(
+                            "UPDATE ai_tutor_classes SET join_code=? WHERE id=? AND teacher_id=?",
+                            (join_code, class_id, teacher_id),
+                        )
+                        if cur.rowcount == 0:
+                            raise ValueError("Class not found or you do not manage it.")
+                        conn.commit()
+                return self.get_class(class_id) or {}
+            except ValueError:
+                raise
+            except Exception as exc:
+                if "unique" not in str(exc).lower() and "join_code" not in str(exc).lower():
+                    raise
+        raise RuntimeError("A new enrolment code could not be generated.")
+
+    def merge_course_outline(
+        self, *, class_id: str, teacher_id: str, objectives: list[str], recommended_readings: list[str]
+    ) -> dict[str, Any]:
+        classroom = self.class_for_user(class_id=class_id, user_id=teacher_id, role="teacher")
+        if not classroom:
+            raise ValueError("Class not found or you do not manage it.")
+        merged_objectives = list(dict.fromkeys([
+            *[str(item).strip() for item in classroom.get("learning_outcomes", []) if str(item).strip()],
+            *[str(item).strip() for item in objectives if str(item).strip()],
+        ]))[:30]
+        merged_readings = list(dict.fromkeys([
+            *[str(item).strip() for item in classroom.get("recommended_readings", []) if str(item).strip()],
+            *[str(item).strip() for item in recommended_readings if str(item).strip()],
+        ]))[:60]
+        return self.update_class_profile(
+            class_id=class_id,
+            teacher_id=teacher_id,
+            name=str(classroom.get("name", "")),
+            subject=str(classroom.get("subject", "")),
+            knowledge_mode=str(classroom.get("knowledge_mode", "course_only")),
+            learning_outcomes=merged_objectives,
+            weekly_topics=list(classroom.get("weekly_topics", [])),
+            recommended_readings=merged_readings,
+            tutor_instructions=str(classroom.get("tutor_instructions", "")),
+            practice_whiteboard_required=bool(classroom.get("practice_whiteboard_required", False)),
+        )
+
     def _new_join_code(self) -> str:
         alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
         return "".join(secrets.choice(alphabet) for _ in range(7))
@@ -404,14 +534,16 @@ class AccountStore:
     def create_class(
         self, *, teacher_id: str, name: str, subject: str, knowledge_mode: str = "course_only",
         learning_outcomes: list[str] | None = None, weekly_topics: list[str] | None = None,
-        tutor_instructions: str = ""
+        recommended_readings: list[str] | None = None, tutor_instructions: str = "",
+        practice_whiteboard_required: bool = False
     ) -> dict[str, Any]:
         class_id = str(uuid.uuid4())
         now = _utcnow()
         knowledge_mode = knowledge_mode if knowledge_mode in {"course_only", "course_plus_approved", "general"} else "course_only"
-        outcomes = [str(item).strip()[:300] for item in (learning_outcomes or []) if str(item).strip()][:20]
-        weeks = [str(item).strip()[:300] for item in (weekly_topics or []) if str(item).strip()][:24]
-        tutor_instructions = tutor_instructions.strip()[:3000]
+        outcomes = [str(item).strip()[:300] for item in (learning_outcomes or []) if str(item).strip()][:30]
+        weeks = [str(item).strip()[:300] for item in (weekly_topics or []) if str(item).strip()][:40]
+        readings = [str(item).strip()[:500] for item in (recommended_readings or []) if str(item).strip()][:60]
+        tutor_instructions = tutor_instructions.strip()[:5000]
         for _ in range(6):
             join_code = self._new_join_code()
             try:
@@ -419,18 +551,18 @@ class AccountStore:
                     with self._pg() as conn, conn.cursor() as cur:
                         cur.execute(
                             """INSERT INTO ai_tutor_classes(
-                                id,teacher_id,name,subject,join_code,knowledge_mode,learning_outcomes,weekly_topics,tutor_instructions,created_at
-                            ) VALUES(%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s)""",
-                            (class_id, teacher_id, name.strip()[:140], subject.strip()[:160], join_code, knowledge_mode, _json(outcomes), _json(weeks), tutor_instructions, now),
+                                id,teacher_id,name,subject,join_code,knowledge_mode,learning_outcomes,weekly_topics,recommended_readings,tutor_instructions,practice_whiteboard_required,created_at
+                            ) VALUES(%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s)""",
+                            (class_id, teacher_id, name.strip()[:140], subject.strip()[:160], join_code, knowledge_mode, _json(outcomes), _json(weeks), _json(readings), tutor_instructions, practice_whiteboard_required, now),
                         )
                         conn.commit()
                 else:
                     with self._lock, self._sqlite() as conn:
                         conn.execute(
                             """INSERT INTO ai_tutor_classes(
-                                id,teacher_id,name,subject,join_code,knowledge_mode,learning_outcomes,weekly_topics,tutor_instructions,created_at
-                            ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                            (class_id, teacher_id, name.strip()[:140], subject.strip()[:160], join_code, knowledge_mode, _json(outcomes), _json(weeks), tutor_instructions, now.isoformat()),
+                                id,teacher_id,name,subject,join_code,knowledge_mode,learning_outcomes,weekly_topics,recommended_readings,tutor_instructions,practice_whiteboard_required,created_at
+                            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (class_id, teacher_id, name.strip()[:140], subject.strip()[:160], join_code, knowledge_mode, _json(outcomes), _json(weeks), _json(readings), tutor_instructions, int(practice_whiteboard_required), now.isoformat()),
                         )
                         conn.commit()
                 return self.get_class(class_id) or {}
@@ -466,7 +598,9 @@ class AccountStore:
             "knowledge_mode": str(row.get("knowledge_mode", "course_only") or "course_only"),
             "learning_outcomes": _safe_json(row.get("learning_outcomes"), []),
             "weekly_topics": _safe_json(row.get("weekly_topics"), []),
+            "recommended_readings": _safe_json(row.get("recommended_readings"), []),
             "tutor_instructions": str(row.get("tutor_instructions", "") or ""),
+            "practice_whiteboard_required": bool(row.get("practice_whiteboard_required", False)),
             "created_at": _iso(row.get("created_at")),
         }
 
@@ -494,16 +628,18 @@ class AccountStore:
 
     def update_class_profile(
         self, *, class_id: str, teacher_id: str, name: str, subject: str, knowledge_mode: str,
-        learning_outcomes: list[str], weekly_topics: list[str], tutor_instructions: str
+        learning_outcomes: list[str], weekly_topics: list[str], recommended_readings: list[str],
+        tutor_instructions: str, practice_whiteboard_required: bool
     ) -> dict[str, Any]:
         knowledge_mode = knowledge_mode if knowledge_mode in {"course_only", "course_plus_approved", "general"} else "course_only"
-        outcomes = [str(item).strip()[:300] for item in learning_outcomes if str(item).strip()][:20]
-        weeks = [str(item).strip()[:300] for item in weekly_topics if str(item).strip()][:24]
-        values = (name.strip()[:140], subject.strip()[:160], knowledge_mode, _json(outcomes), _json(weeks), tutor_instructions.strip()[:3000])
+        outcomes = [str(item).strip()[:300] for item in learning_outcomes if str(item).strip()][:30]
+        weeks = [str(item).strip()[:300] for item in weekly_topics if str(item).strip()][:40]
+        readings = [str(item).strip()[:500] for item in recommended_readings if str(item).strip()][:60]
+        values = (name.strip()[:140], subject.strip()[:160], knowledge_mode, _json(outcomes), _json(weeks), _json(readings), tutor_instructions.strip()[:5000], practice_whiteboard_required)
         if self._use_postgres:
             with self._pg() as conn, conn.cursor() as cur:
                 cur.execute(
-                    """UPDATE ai_tutor_classes SET name=%s,subject=%s,knowledge_mode=%s,learning_outcomes=%s::jsonb,weekly_topics=%s::jsonb,tutor_instructions=%s
+                    """UPDATE ai_tutor_classes SET name=%s,subject=%s,knowledge_mode=%s,learning_outcomes=%s::jsonb,weekly_topics=%s::jsonb,recommended_readings=%s::jsonb,tutor_instructions=%s,practice_whiteboard_required=%s
                        WHERE id=%s AND teacher_id=%s""",
                     (*values, class_id, teacher_id),
                 )
@@ -513,7 +649,7 @@ class AccountStore:
         else:
             with self._lock, self._sqlite() as conn:
                 cur = conn.execute(
-                    """UPDATE ai_tutor_classes SET name=?,subject=?,knowledge_mode=?,learning_outcomes=?,weekly_topics=?,tutor_instructions=?
+                    """UPDATE ai_tutor_classes SET name=?,subject=?,knowledge_mode=?,learning_outcomes=?,weekly_topics=?,recommended_readings=?,tutor_instructions=?,practice_whiteboard_required=?
                        WHERE id=? AND teacher_id=?""",
                     (*values, class_id, teacher_id),
                 )
@@ -551,7 +687,14 @@ class AccountStore:
         return self.get_class(str(class_id)) or {}
 
     def classes_for_user(self, user_id: str, role: str) -> list[dict[str, Any]]:
-        if role in {"teacher", "admin"}:
+        if role == "admin":
+            sql = """
+            SELECT c.*, u.display_name AS teacher_name,
+                   (SELECT COUNT(*) FROM ai_tutor_class_members m WHERE m.class_id=c.id) AS student_count
+            FROM ai_tutor_classes c JOIN ai_tutor_users u ON u.id=c.teacher_id
+            ORDER BY c.created_at DESC
+            """
+        elif role == "teacher":
             sql = """
             SELECT c.*, u.display_name AS teacher_name,
                    (SELECT COUNT(*) FROM ai_tutor_class_members m WHERE m.class_id=c.id) AS student_count
@@ -569,10 +712,13 @@ class AccountStore:
             """
         if self._use_postgres:
             with self._pg() as conn, conn.cursor() as cur:
-                cur.execute(sql.format(placeholder="%s"), (user_id,))
+                if role == "admin":
+                    cur.execute(sql)
+                else:
+                    cur.execute(sql.format(placeholder="%s"), (user_id,))
                 return [self._class_public(dict(row)) for row in cur.fetchall()]
         with self._lock, self._sqlite() as conn:
-            rows = conn.execute(sql.format(placeholder="?"), (user_id,)).fetchall()
+            rows = conn.execute(sql if role == "admin" else sql.format(placeholder="?"), () if role == "admin" else (user_id,)).fetchall()
             return [self._class_public(dict(row)) for row in rows]
 
     def ensure_chat_session(self, *, session_id: str, user_id: str, title: str, course: str) -> None:
@@ -807,7 +953,9 @@ class AccountStore:
             return self._video_public(dict(row), include_private=True) if row else None
 
     def dashboard(self, user_id: str, role: str) -> dict[str, Any]:
-        return self._teacher_dashboard(user_id) if role in {"teacher", "admin"} else self._student_dashboard(user_id)
+        if role == "admin":
+            return self._admin_dashboard(user_id)
+        return self._teacher_dashboard(user_id) if role == "teacher" else self._student_dashboard(user_id)
 
     def _event_rows(self, *, user_id: str | None = None, teacher_id: str | None = None, limit: int = 1000) -> list[dict[str, Any]]:
         if teacher_id:
@@ -1026,6 +1174,55 @@ class AccountStore:
             **insights,
         }
 
+
+    def _admin_dashboard(self, admin_id: str) -> dict[str, Any]:
+        lecturers = self.list_users(role="teacher", limit=2000)
+        students = self.list_users(role="student", limit=5000)
+        classes = self.classes_for_user(admin_id, "admin")
+        if self._use_postgres:
+            with self._pg() as conn, conn.cursor() as cur:
+                cur.execute(
+                    """SELECT provider, model, SUM(input_tokens) AS input_tokens,
+                              SUM(output_tokens) AS output_tokens, SUM(estimated_cost_usd) AS cost
+                       FROM ai_tutor_usage_events GROUP BY provider, model ORDER BY cost DESC"""
+                )
+                rows = [dict(row) for row in cur.fetchall()]
+        else:
+            with self._lock, self._sqlite() as conn:
+                rows = [dict(row) for row in conn.execute(
+                    """SELECT provider, model, SUM(input_tokens) AS input_tokens,
+                              SUM(output_tokens) AS output_tokens, SUM(estimated_cost_usd) AS cost
+                       FROM ai_tutor_usage_events GROUP BY provider, model ORDER BY cost DESC"""
+                ).fetchall()]
+        usage = [{
+            "provider": str(row.get("provider", "")),
+            "model": str(row.get("model", "")),
+            "input_tokens": int(row.get("input_tokens", 0) or 0),
+            "output_tokens": int(row.get("output_tokens", 0) or 0),
+            "estimated_cost_usd": round(float(row.get("cost", 0) or 0), 6),
+        } for row in rows]
+        return {
+            "role": "admin",
+            "summary": {
+                "lecturers": len(lecturers),
+                "active_lecturers": sum(bool(item.get("active")) for item in lecturers),
+                "students": len(students),
+                "courses": len(classes),
+                "enrolments": sum(int(item.get("student_count", 0) or 0) for item in classes),
+            },
+            "classes": classes,
+            "recent_activity": [],
+            "weak_topics": [],
+            "students": students[:500],
+            "lecturers": lecturers,
+            "videos": [],
+            "usage": usage,
+            "outcome_mastery": [],
+            "common_misconceptions": [],
+            "unanswered_questions": [],
+            "interventions": [],
+            "popular_questions": [],
+        }
 
     def monthly_usage_cost(self, user_id: str) -> float:
         if self._use_postgres:
