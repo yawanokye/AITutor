@@ -76,7 +76,7 @@ Choose one method only.
 - [ ] Select **Clear build cache and deploy**.
 - [ ] Wait for the status to become **Live**.
 - [ ] Open `/health`.
-- [ ] Confirm `version` is `5.0.0`.
+- [ ] Confirm `version` is `5.0.2`.
 - [ ] Confirm the five new capability flags are `true`.
 - [ ] Refresh the browser with `Ctrl + Shift + R`.
 
@@ -138,3 +138,11 @@ Choose one method only.
 - [ ] Define lecturer-account approval and offboarding procedures.
 - [ ] Define document copyright and data-retention rules.
 - [ ] Pilot with representative courses before a 30,000-student rollout.
+
+
+## Document isolation checks
+
+- [ ] Administrator repository documents are visible only in the Administrator Portal.
+- [ ] Lecturer A cannot see Lecturer B's uploaded documents.
+- [ ] Deleting a lecturer document removes it from both course contents and indexed materials.
+- [ ] A student enrolled in two or more courses sees every enrolled course.
