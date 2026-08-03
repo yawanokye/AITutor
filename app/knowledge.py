@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_'-]{1,}")
 MATERIAL_TYPES = {"course", "approved_external"}
+REPOSITORY_SCOPES = {"course", "admin_private", "shared"}
 
 
 @dataclass
@@ -30,6 +31,7 @@ class Chunk:
     class_id: str = ""
     material_type: str = "course"
     display_source: str = ""
+    repository_scope: str = ""
 
 
 @dataclass
@@ -75,11 +77,13 @@ def make_chunks(
     class_id: str = "",
     material_type: str = "course",
     display_source: str = "",
+    repository_scope: str = "",
 ) -> list[Chunk]:
     clean = _normalise_space(text)
     if not clean:
         return []
     material_type = material_type if material_type in MATERIAL_TYPES else "course"
+    repository_scope = repository_scope if repository_scope in REPOSITORY_SCOPES else ("course" if class_id else "admin_private")
     words = clean.split()
     chunks: list[Chunk] = []
     start = 0
@@ -96,6 +100,7 @@ def make_chunks(
                     class_id=class_id,
                     material_type=material_type,
                     display_source=display_source or source,
+                    repository_scope=repository_scope,
                 )
             )
             index += 1
@@ -133,6 +138,7 @@ class KnowledgeStore:
                             class_id TEXT NOT NULL DEFAULT '',
                             material_type TEXT NOT NULL DEFAULT 'course',
                             display_source TEXT NOT NULL DEFAULT '',
+                            repository_scope TEXT NOT NULL DEFAULT '',
                             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                             UNIQUE(source, chunk_index)
                         )
@@ -141,7 +147,13 @@ class KnowledgeStore:
                     cur.execute("ALTER TABLE ai_tutor_knowledge_chunks ADD COLUMN IF NOT EXISTS class_id TEXT NOT NULL DEFAULT ''")
                     cur.execute("ALTER TABLE ai_tutor_knowledge_chunks ADD COLUMN IF NOT EXISTS material_type TEXT NOT NULL DEFAULT 'course'")
                     cur.execute("ALTER TABLE ai_tutor_knowledge_chunks ADD COLUMN IF NOT EXISTS display_source TEXT NOT NULL DEFAULT ''")
-                    cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_tutor_knowledge_scope ON ai_tutor_knowledge_chunks(class_id, material_type)")
+                    cur.execute("ALTER TABLE ai_tutor_knowledge_chunks ADD COLUMN IF NOT EXISTS repository_scope TEXT NOT NULL DEFAULT ''")
+                    # Every historical class-less source is an administrator repository item.
+                    # This migration prevents legacy uploads from leaking into lecturer courses.
+                    cur.execute("""UPDATE ai_tutor_knowledge_chunks
+                                   SET repository_scope = CASE WHEN class_id = '' THEN 'admin_private' ELSE 'course' END
+                                   WHERE repository_scope IS NULL OR repository_scope = ''""")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_tutor_knowledge_scope ON ai_tutor_knowledge_chunks(class_id, material_type, repository_scope)")
                 conn.commit()
             return
 
@@ -156,6 +168,7 @@ class KnowledgeStore:
                         class_id=str(item.get("class_id", "")),
                         material_type=str(item.get("material_type", "course")),
                         display_source=str(item.get("display_source", item.get("source", ""))),
+                        repository_scope=str(item.get("repository_scope") or ("course" if item.get("class_id") else "admin_private")),
                     )
                     for item in raw
                 ]
@@ -168,14 +181,19 @@ class KnowledgeStore:
 
     def replace_source(self, source: str, chunks: Iterable[Chunk]) -> int:
         new_chunks = list(chunks)
+        for chunk in new_chunks:
+            if chunk.material_type not in MATERIAL_TYPES:
+                chunk.material_type = "course"
+            if chunk.repository_scope not in REPOSITORY_SCOPES:
+                chunk.repository_scope = "course" if chunk.class_id else "admin_private"
         if self._use_postgres:
             with self._connect() as conn:
                 with conn.cursor() as cur:
                     cur.execute("DELETE FROM ai_tutor_knowledge_chunks WHERE source = %s", (source,))
                     cur.executemany(
                         """INSERT INTO ai_tutor_knowledge_chunks
-                           (source, chunk_index, content, class_id, material_type, display_source)
-                           VALUES (%s, %s, %s, %s, %s, %s)""",
+                           (source, chunk_index, content, class_id, material_type, display_source, repository_scope)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                         [
                             (
                                 c.source,
@@ -184,6 +202,7 @@ class KnowledgeStore:
                                 c.class_id,
                                 c.material_type if c.material_type in MATERIAL_TYPES else "course",
                                 c.display_source or c.source,
+                                c.repository_scope if c.repository_scope in REPOSITORY_SCOPES else ("course" if c.class_id else "admin_private"),
                             )
                             for c in new_chunks
                         ],
@@ -202,7 +221,7 @@ class KnowledgeStore:
             with self._connect() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        """SELECT source, chunk_index, content, class_id, material_type, display_source
+                        """SELECT source, chunk_index, content, class_id, material_type, display_source, repository_scope
                            FROM ai_tutor_knowledge_chunks ORDER BY source, chunk_index"""
                     )
                     rows = cur.fetchall()
@@ -214,18 +233,31 @@ class KnowledgeStore:
                     class_id=row[3] or "",
                     material_type=row[4] or "course",
                     display_source=row[5] or row[0],
+                    repository_scope=row[6] or ("course" if row[3] else "admin_private"),
                 )
                 for row in rows
             ]
         with self._lock:
             return list(self._memory)
 
-    def list_sources(self, *, class_id: str | None = None, include_global: bool = True) -> list[dict[str, object]]:
+    def list_sources(self, *, class_id: str | None = None, include_global: bool = False) -> list[dict[str, object]]:
+        """List only sources belonging to the requested repository.
+
+        Blank class ids are the private administrator repository. A lecturer or
+        student course request can never include those rows, including legacy rows.
+        """
         chunks = self.all_chunks()
-        if class_id is not None:
-            chunks = [c for c in chunks if c.class_id == class_id or (include_global and not c.class_id)]
-        counts: Counter[tuple[str, str, str, str]] = Counter(
-            (chunk.source, chunk.display_source or chunk.source, chunk.class_id, chunk.material_type) for chunk in chunks
+        if class_id is None:
+            pass
+        elif class_id == "":
+            chunks = [c for c in chunks if not c.class_id and c.repository_scope == "admin_private"]
+        else:
+            chunks = [c for c in chunks if c.class_id == class_id and c.repository_scope == "course"]
+            if include_global:
+                chunks.extend(c for c in self.all_chunks() if c.repository_scope == "shared" and not c.class_id)
+        counts: Counter[tuple[str, str, str, str, str]] = Counter(
+            (chunk.source, chunk.display_source or chunk.source, chunk.class_id, chunk.material_type, chunk.repository_scope)
+            for chunk in chunks
         )
         return [
             {
@@ -234,25 +266,103 @@ class KnowledgeStore:
                 "chunks": count,
                 "class_id": scope,
                 "material_type": material_type,
+                "repository_scope": repository_scope,
             }
-            for (source_id, display_source, scope, material_type), count in sorted(counts.items(), key=lambda item: (item[0][1], item[0][2], item[0][3]))
+            for (source_id, display_source, scope, material_type, repository_scope), count
+            in sorted(counts.items(), key=lambda item: (item[0][1], item[0][2], item[0][3]))
         ]
 
-    def delete_source(self, source: str) -> bool:
+    def source_metadata(self, source: str) -> dict[str, object] | None:
         source = str(source or "").strip()
         if not source:
-            return False
+            return None
+        chunks = [chunk for chunk in self.all_chunks() if chunk.source == source]
+        if not chunks:
+            return None
+        first = chunks[0]
+        return {
+            "source_id": source,
+            "source": first.display_source or source,
+            "class_id": first.class_id,
+            "material_type": first.material_type,
+            "repository_scope": first.repository_scope,
+            "chunks": len(chunks),
+        }
+
+    def delete_source(self, source: str) -> int:
+        """Delete an exact indexed source and return the number of removed chunks."""
+        source = str(source or "").strip()
+        if not source:
+            return 0
         if self._use_postgres:
             with self._connect() as conn:
                 with conn.cursor() as cur:
                     cur.execute("DELETE FROM ai_tutor_knowledge_chunks WHERE source = %s", (source,))
-                    changed = cur.rowcount > 0
+                    changed = max(int(cur.rowcount or 0), 0)
                 conn.commit()
             return changed
         with self._lock:
             before = len(self._memory)
             self._memory = [chunk for chunk in self._memory if chunk.source != source]
-            changed = len(self._memory) != before
+            changed = before - len(self._memory)
+            if changed:
+                self._save_local()
+            return changed
+
+    def delete_admin_source(self, source: str) -> int:
+        """Delete only a private administrator source, including legacy source names."""
+        metadata = self.source_metadata(source)
+        if not metadata:
+            return 0
+        if metadata.get("class_id") or metadata.get("repository_scope") != "admin_private":
+            return 0
+        return self.delete_source(source)
+
+    def delete_course_document_sources(
+        self, *, class_id: str, document_id: str, filename: str, document_type: str
+    ) -> int:
+        """Remove current and historical index aliases for one course document."""
+        class_id = str(class_id or "").strip()
+        document_id = str(document_id or "").strip()
+        filename = str(filename or "").strip()
+        document_type = str(document_type or "teaching_notes").strip()
+        if not class_id or not document_id:
+            return 0
+        exact_sources = {
+            f"{class_id}::{document_type}::{document_id}",
+            f"{class_id}::{document_id}",
+            f"{class_id}::{document_type}::{filename}",
+            f"{class_id}::{filename}",
+            filename,
+        }
+        if self._use_postgres:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """DELETE FROM ai_tutor_knowledge_chunks
+                           WHERE class_id = %s AND repository_scope = 'course'
+                             AND (source = ANY(%s) OR source LIKE %s OR display_source = %s OR display_source LIKE %s)""",
+                        (class_id, list(exact_sources), f"%::{document_id}", filename, f"{filename} •%"),
+                    )
+                    changed = max(int(cur.rowcount or 0), 0)
+                conn.commit()
+            return changed
+        with self._lock:
+            before = len(self._memory)
+            self._memory = [
+                chunk for chunk in self._memory
+                if not (
+                    chunk.class_id == class_id
+                    and chunk.repository_scope == "course"
+                    and (
+                        chunk.source in exact_sources
+                        or chunk.source.endswith(f"::{document_id}")
+                        or (chunk.display_source or "") == filename
+                        or (chunk.display_source or "").startswith(f"{filename} •")
+                    )
+                )
+            ]
+            changed = before - len(self._memory)
             if changed:
                 self._save_local()
             return changed
@@ -273,9 +383,8 @@ class KnowledgeStore:
             for chunk in chunks
             if chunk.material_type in allowed_types
             and (
-                (class_id and chunk.class_id == class_id)
-                or (include_global and not chunk.class_id)
-                or (not class_id and not chunk.class_id)
+                (class_id and chunk.class_id == class_id and chunk.repository_scope == "course")
+                or (include_global and chunk.repository_scope == "shared" and not chunk.class_id)
             )
         ]
         if not chunks or not query.strip():

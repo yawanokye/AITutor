@@ -79,8 +79,21 @@ logger = logging.getLogger("ai_tutor")
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title=settings.app_name, version="5.0.2")
+app = FastAPI(title=settings.app_name, version="5.0.3")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.middleware("http")
+async def prevent_stale_portal_assets(request: Request, call_next):
+    """Prevent old portal/API responses from surviving a deployment upgrade."""
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/api/") or path == "/health":
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+    elif path.startswith("/static/") and path.endswith((".js", ".css", ".html")):
+        response.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
+    return response
 
 knowledge = KnowledgeStore(database_url=settings.database_url, storage_dir=settings.storage_dir)
 accounts = AccountStore(database_url=settings.database_url, storage_dir=settings.storage_dir)
@@ -1947,15 +1960,20 @@ async def list_admin_materials(request: Request) -> dict[str, Any]:
 
 
 @app.delete("/api/admin/materials")
-async def delete_admin_material(request: Request, source_id: str) -> dict[str, str]:
+async def delete_admin_material(request: Request, source_id: str) -> dict[str, Any]:
     _required_admin(request)
     source_id = source_id.strip()
-    if not source_id.startswith("global::"):
-        raise HTTPException(status_code=400, detail="Only administrator repository documents can be removed here.")
-    deleted = await run_in_threadpool(knowledge.delete_source, source_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Administrator document not found.")
-    return {"status": "deleted"}
+    if not source_id:
+        raise HTTPException(status_code=422, detail="Select an administrator document to delete.")
+    metadata = await run_in_threadpool(knowledge.source_metadata, source_id)
+    if not metadata:
+        raise HTTPException(status_code=404, detail="Administrator document not found. Refresh the repository and try again.")
+    if metadata.get("class_id") or metadata.get("repository_scope") != "admin_private":
+        raise HTTPException(status_code=403, detail="This document does not belong to the private administrator repository.")
+    deleted_chunks = await run_in_threadpool(knowledge.delete_admin_source, source_id)
+    if deleted_chunks < 1:
+        raise HTTPException(status_code=409, detail="The document could not be removed. Refresh and try again.")
+    return {"status": "deleted", "source_id": source_id, "deleted_chunks": deleted_chunks}
 
 
 @app.post("/api/materials/upload")
@@ -2031,6 +2049,7 @@ async def upload_materials(
                         class_id=class_id,
                         material_type=material_type,
                         display_source=f"{filename} • {section.get('section_path') or section.get('title')}",
+                        repository_scope="course",
                     )
                     for chunk in section_chunks:
                         chunk.chunk_index = chunk_index
@@ -2062,7 +2081,8 @@ async def upload_materials(
                 text = await run_in_threadpool(extract_text, filename, data)
                 internal_source = f"global::{material_type}::{filename}"
                 chunks = await run_in_threadpool(
-                    make_chunks, text, internal_source, class_id="", material_type=material_type, display_source=filename
+                    make_chunks, text, internal_source, class_id="", material_type=material_type, display_source=filename,
+                    repository_scope="admin_private"
                 )
                 if not chunks:
                     raise ValueError("No readable text was found. A scanned PDF may need OCR before upload.")
@@ -2080,7 +2100,7 @@ async def upload_materials(
 
 
 @app.delete("/api/classes/{class_id}/documents/{document_id}")
-async def delete_course_document(request: Request, class_id: str, document_id: str) -> dict[str, str]:
+async def delete_course_document(request: Request, class_id: str, document_id: str) -> dict[str, Any]:
     user = _required_lecturer(request)
     classroom = await run_in_threadpool(
         accounts.class_for_user, class_id=class_id, user_id=str(user["id"]), role="teacher"
@@ -2090,12 +2110,17 @@ async def delete_course_document(request: Request, class_id: str, document_id: s
     document = await run_in_threadpool(course_content.get_document, document_id)
     if not document or str(document.get("class_id")) != class_id:
         raise HTTPException(status_code=404, detail="Course document not found.")
-    internal_source = f"{class_id}::{document.get('document_type', 'teaching_notes')}::{document_id}"
+    deleted_chunks = await run_in_threadpool(
+        knowledge.delete_course_document_sources,
+        class_id=class_id,
+        document_id=document_id,
+        filename=str(document.get("filename", "")),
+        document_type=str(document.get("document_type", "teaching_notes")),
+    )
     deleted = await run_in_threadpool(course_content.delete_document, document_id, class_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Course document not found.")
-    await run_in_threadpool(knowledge.delete_source, internal_source)
-    return {"status": "deleted"}
+    return {"status": "deleted", "document_id": document_id, "deleted_chunks": deleted_chunks}
 
 
 @app.delete("/api/session/{session_id}")
