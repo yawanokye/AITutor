@@ -23,8 +23,10 @@ from app.main import (
     _extract_response_text,
     _normalise_visual_plan,
     app,
+    knowledge,
 )
 from app.schemas import VisualPlan
+from app.knowledge import make_chunks
 
 
 client = TestClient(app)
@@ -155,7 +157,7 @@ def test_health_reports_v5_portal_build():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["version"] == "5.0.2"
+    assert data["version"] == "5.0.3"
     assert data["live_video_enabled"] is False
     assert data["institutional_mode"] is True
     assert data["course_lock_enabled"] is True
@@ -180,8 +182,8 @@ def test_index_contains_v5_role_portals_and_two_whiteboards():
         'id="openDashboard"', 'id="classSelect"', 'id="outcomeSelect"', 'id="weekSelect"',
     ):
         assert identifier in html
-    assert '/static/portal.js?v=5.0.2' in html
-    assert '/static/practice_board.js?v=5.0.2' in html
+    assert '/static/portal.js?v=5.0.3' in html
+    assert '/static/practice_board.js?v=5.0.3' in html
     assert 'Administrator sign in' in html
     assert 'Lecturer sign in' in html
     assert 'Student sign in' in html
@@ -520,6 +522,65 @@ def test_student_sees_every_enrolled_course_from_multiple_lecturers():
     assert {class_a["id"], class_b["id"]}.issubset(dashboard_ids)
     assert dashboard["summary"]["classes"] >= 2
 
+def test_legacy_classless_admin_source_is_hidden_and_deletable():
+    admin = admin_account()
+    source = f"legacy-admin-{uuid.uuid4().hex}.txt"
+    chunks = make_chunks(
+        "Legacy private administrator content that must never enter lecturer courses.",
+        source,
+        class_id="",
+        material_type="course",
+        display_source=source,
+        repository_scope="admin_private",
+    )
+    knowledge.replace_source(source, chunks)
+
+    lecturer, _ = lecturer_account("Legacy Isolation Lecturer")
+    classroom = create_course(lecturer, name="Legacy Isolation Course")
+    lecturer_rows = client.get(
+        f"/api/materials?class_id={classroom['id']}", headers=headers(lecturer)
+    ).json()["materials"]
+    assert all(row["source_id"] != source for row in lecturer_rows)
+
+    admin_rows = client.get("/api/admin/materials", headers=headers(admin)).json()["materials"]
+    assert any(row["source_id"] == source for row in admin_rows)
+    deleted = client.delete("/api/admin/materials", headers=headers(admin), params={"source_id": source})
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted_chunks"] >= 1
+    assert knowledge.source_metadata(source) is None
+
+
+def test_course_delete_removes_legacy_index_aliases():
+    lecturer, _ = lecturer_account("Legacy Course Delete Lecturer")
+    classroom = create_course(lecturer, name="Legacy Delete Course")
+    uploaded = upload_outline(lecturer, classroom)
+    document = uploaded["documents"][0]
+    legacy_source = document["filename"]
+    legacy_chunks = make_chunks(
+        "Stale legacy course extract.",
+        legacy_source,
+        class_id=classroom["id"],
+        material_type="course",
+        display_source=document["filename"],
+        repository_scope="course",
+    )
+    knowledge.replace_source(legacy_source, legacy_chunks)
+    response = client.delete(
+        f"/api/classes/{classroom['id']}/documents/{document['id']}",
+        headers=headers(lecturer),
+    )
+    assert response.status_code == 200, response.text
+    rows = client.get(f"/api/materials?class_id={classroom['id']}", headers=headers(lecturer)).json()["materials"]
+    assert rows == []
+
+
+def test_portal_and_api_responses_disable_stale_caching():
+    root_response = client.get("/")
+    api_response = client.get("/api/config")
+    assert "no-store" in root_response.headers.get("cache-control", "")
+    assert "no-store" in api_response.headers.get("cache-control", "")
+
+
 def test_extract_response_text_from_message_items():
     class Part:
         type = "output_text"
@@ -546,7 +607,7 @@ def test_service_worker_and_manifest_are_v5():
     assert manifest.status_code == 200
     assert worker.status_code == 200
     assert "Anovlad Institutional AI Tutor" in manifest.text
-    assert "anovlad-ai-tutor-v5-0-2-shell" in worker.text
+    assert "anovlad-ai-tutor-v5-0-3-shell" in worker.text
 
 
 def test_cost_aware_router_prefers_flash_for_normal_and_pro_for_advanced():
