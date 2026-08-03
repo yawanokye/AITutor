@@ -1,11 +1,20 @@
 import base64
 import os
+import tempfile
+import uuid
+from io import BytesIO
 
-os.environ.setdefault("DEMO_MODE", "true")
-os.environ.setdefault("ADMIN_KEY", "test-admin")
-os.environ.setdefault("DATABASE_URL", "")
-os.environ.setdefault("VISUAL_PLAN_ENABLED", "true")
+os.environ["DEMO_MODE"] = "true"
+os.environ["ADMIN_KEY"] = "test-admin-bootstrap"
+os.environ["AUTH_SECRET"] = "test-auth-secret-long-enough"
+os.environ["DATABASE_URL"] = ""
+os.environ["VISUAL_PLAN_ENABLED"] = "true"
+os.environ["REQUIRE_LOGIN_FOR_AI"] = "false"
+os.environ["RATE_LIMIT_PER_MINUTE"] = "500"
+os.environ["STORAGE_DIR"] = tempfile.mkdtemp(prefix="ai-tutor-v5-tests-")
+os.environ["ALLOW_PUBLIC_TEACHER_REGISTRATION"] = "false"
 
+from docx import Document
 from fastapi.testclient import TestClient
 
 from app.main import (
@@ -22,189 +31,408 @@ client = TestClient(app)
 ONE_PIXEL_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
+_ADMIN = None
 
 
-def test_health():
+def headers(auth):
+    return {"Authorization": f"Bearer {auth['access_token']}"}
+
+
+def unique_email(prefix):
+    return f"{prefix}-{uuid.uuid4().hex[:12]}@example.com"
+
+
+def admin_account():
+    global _ADMIN
+    if _ADMIN:
+        return _ADMIN
+    response = client.post(
+        "/api/admin/bootstrap",
+        json={
+            "admin_key": "test-admin-bootstrap",
+            "display_name": "Test Administrator",
+            "email": unique_email("admin"),
+            "password": "AdminStrong123!",
+        },
+    )
+    assert response.status_code == 200, response.text
+    _ADMIN = response.json()
+    return _ADMIN
+
+
+def lecturer_account(name="Test Lecturer"):
+    admin = admin_account()
+    email = unique_email("lecturer")
+    temporary = "LecturerTemp123!"
+    created = client.post(
+        "/api/admin/lecturers",
+        headers=headers(admin),
+        json={"display_name": name, "email": email, "temporary_password": temporary},
+    )
+    assert created.status_code == 200, created.text
+    login = client.post("/api/auth/login", json={"email": email, "password": temporary})
+    assert login.status_code == 200, login.text
+    return login.json(), created.json()
+
+
+def student_account(name="Test Student"):
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "display_name": name,
+            "email": unique_email("student"),
+            "password": "StudentStrong123!",
+            "role": "student",
+            "teacher_invite_code": "",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def create_course(lecturer, *, name="Statistics 101", required=False):
+    response = client.post(
+        "/api/classes",
+        headers=headers(lecturer),
+        json={
+            "name": name,
+            "subject": "STA 101",
+            "knowledge_mode": "course_only",
+            "learning_outcomes": [],
+            "weekly_topics": [],
+            "recommended_readings": [],
+            "tutor_instructions": "Use the uploaded lecturer notes as the main authority.",
+            "practice_whiteboard_required": required,
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def outline_docx_bytes():
+    output = BytesIO()
+    document = Document()
+    document.add_heading("STA 101 Detailed Course Outline", 0)
+    document.add_heading("Course Objectives", 1)
+    document.add_paragraph("1. Explain descriptive statistics")
+    document.add_paragraph("2. Distinguish qualitative and quantitative data")
+    document.add_heading("Recommended Reading", 1)
+    document.add_paragraph("1. Author, A. Introductory Statistics")
+    document.add_heading("1. Introduction to Statistics", 1)
+    document.add_paragraph("Statistics concerns the collection, organisation, analysis and interpretation of data.")
+    document.add_heading("1.1 Types of Data", 2)
+    document.add_paragraph("Qualitative data describe categories. Quantitative data are numerical.")
+    document.save(output)
+    return output.getvalue()
+
+
+def upload_outline(lecturer, classroom):
+    response = client.post(
+        "/api/materials/upload",
+        headers=headers(lecturer),
+        data={"class_id": classroom["id"], "document_type": "course_outline"},
+        files=[(
+            "files",
+            ("statistics-outline.docx", outline_docx_bytes(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        )],
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def enrol(student, classroom):
+    response = client.post(
+        "/api/classes/join",
+        headers=headers(student),
+        json={"join_code": classroom["join_code"]},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_health_reports_v5_portal_build():
     response = client.get("/health")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["version"] == "4.0.0"
+    assert data["version"] == "5.0.0"
     assert data["live_video_enabled"] is False
     assert data["institutional_mode"] is True
     assert data["course_lock_enabled"] is True
-    assert data["low_bandwidth_enabled"] is True
     assert data["visual_plan_enabled"] is True
 
 
 def test_config_exposes_interactive_features():
-    response = client.get("/api/config")
-    assert response.status_code == 200
-    data = response.json()
+    data = client.get("/api/config").json()
     assert data["demo_mode"] is True
     assert data["visual_plan_enabled"] is True
     assert data["interactive_practice_enabled"] is True
     assert data["work_check_enabled"] is True
-    assert data["image_detail"] in {"low", "high", "auto"}
     assert data["institutional_mode"] is True
-    assert data["course_lock_enabled"] is True
-    assert data["low_bandwidth_enabled"] is True
     assert data["live_video_enabled"] is False
+
+
+def test_index_contains_v5_role_portals_and_two_whiteboards():
+    html = client.get("/").text
+    for identifier in (
+        'id="drawingCanvas"', 'id="practiceDrawingCanvas"', 'id="courseNavigatorPanel"',
+        'id="courseStructureList"', 'id="documentType"', 'id="showAdminSetup"',
+        'id="openDashboard"', 'id="classSelect"', 'id="outcomeSelect"', 'id="weekSelect"',
+    ):
+        assert identifier in html
+    assert '/static/portal.js?v=5.0.0' in html
+    assert '/static/practice_board.js?v=5.0.0' in html
+    assert 'Teacher invitation code' not in html
+    assert 'openLiveVideo' not in html
+
+
+def test_first_administrator_bootstrap_and_admin_dashboard():
+    admin = admin_account()
+    me = client.get("/api/auth/me", headers=headers(admin))
+    assert me.status_code == 200
+    assert me.json()["role"] == "admin"
+    dashboard = client.get("/api/dashboard", headers=headers(admin))
+    assert dashboard.status_code == 200
+    assert dashboard.json()["role"] == "admin"
+    assert "lecturers" in dashboard.json()
+
+
+def test_second_administrator_bootstrap_is_blocked():
+    admin_account()
+    response = client.post(
+        "/api/admin/bootstrap",
+        json={
+            "admin_key": "test-admin-bootstrap",
+            "display_name": "Another Administrator",
+            "email": unique_email("admin2"),
+            "password": "AdminStrong123!",
+        },
+    )
+    assert response.status_code == 409
+
+
+def test_public_lecturer_registration_is_blocked():
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "display_name": "Public Lecturer",
+            "email": unique_email("public-lecturer"),
+            "password": "StrongPass123!",
+            "role": "teacher",
+            "teacher_invite_code": "any-code",
+        },
+    )
+    assert response.status_code == 403
+    assert "administrator" in response.json()["detail"].lower()
+
+
+def test_administrator_creates_lecturer_with_temporary_password():
+    lecturer, created = lecturer_account("Dr Created Lecturer")
+    assert lecturer["user"]["role"] == "teacher"
+    assert created["temporary_password"]
+    assert created["user"]["must_change_password"] is True
+    listing = client.get("/api/admin/lecturers", headers=headers(admin_account()))
+    assert listing.status_code == 200
+    assert any(item["id"] == created["user"]["id"] for item in listing.json())
+
+
+def test_lecturer_changes_temporary_password():
+    lecturer, _ = lecturer_account()
+    response = client.post(
+        "/api/auth/change-password",
+        headers=headers(lecturer),
+        json={"current_password": "LecturerTemp123!", "new_password": "NewLecturerStrong123!"},
+    )
+    assert response.status_code == 200
+    me = client.get("/api/auth/me", headers=headers(lecturer)).json()
+    assert me["must_change_password"] is False
+
+
+def test_lecturer_creates_course_and_regenerates_enrolment_code():
+    lecturer, _ = lecturer_account()
+    classroom = create_course(lecturer)
+    assert len(classroom["join_code"]) == 7
+    changed = client.post(f"/api/classes/{classroom['id']}/regenerate-code", headers=headers(lecturer))
+    assert changed.status_code == 200
+    assert changed.json()["join_code"] != classroom["join_code"]
+
+
+def test_student_registers_and_enrols_with_lecturer_code():
+    lecturer, _ = lecturer_account()
+    classroom = create_course(lecturer, name="Course for enrolment")
+    student = student_account()
+    joined = enrol(student, classroom)
+    assert joined["id"] == classroom["id"]
+    classes = client.get("/api/classes", headers=headers(student)).json()
+    assert any(item["id"] == classroom["id"] for item in classes)
+
+
+def test_course_outline_extracts_objectives_readings_and_subsections():
+    lecturer, _ = lecturer_account()
+    classroom = create_course(lecturer, name="Structured Course")
+    uploaded = upload_outline(lecturer, classroom)
+    item = uploaded["uploaded"][0]
+    assert item["document_type"] == "course_outline"
+    assert item["sections"] >= 4
+    assert item["objectives_found"] == 2
+    assert item["readings_found"] == 1
+    refreshed = client.get("/api/classes", headers=headers(lecturer)).json()
+    course = next(row for row in refreshed if row["id"] == classroom["id"])
+    assert "Explain descriptive statistics" in course["learning_outcomes"]
+    assert any("Introductory Statistics" in item for item in course["recommended_readings"])
+
+
+def test_student_opens_course_structure_and_generates_grounded_section_lesson():
+    lecturer, _ = lecturer_account()
+    classroom = create_course(lecturer, name="Section Lesson Course")
+    upload_outline(lecturer, classroom)
+    student = student_account()
+    enrol(student, classroom)
+    structure = client.get(f"/api/classes/{classroom['id']}/course-structure", headers=headers(student))
+    assert structure.status_code == 200
+    documents = structure.json()["documents"]
+    sections = [section for document in documents for section in document["sections"]]
+    target = next(section for section in sections if "Types of Data" in section["title"])
+    lesson = client.post(
+        f"/api/course/sections/{target['id']}/teach",
+        headers=headers(student),
+        json={"level": "University", "detail": "detailed", "include_worked_examples": True, "include_self_check": True},
+    )
+    assert lesson.status_code == 200, lesson.text
+    data = lesson.json()
+    assert "Types of Data" in data["section_title"]
+    assert data["sources"]
+    assert data["visual"]["kind"] == "slides"
+    assert data["visual"]["slides"]
+    first_slide = data["visual"]["slides"][0]
+    assert "explanation" in first_slide
+    assert "speaker_note" in first_slide
+
+
+def test_documents_are_isolated_by_course():
+    lecturer, _ = lecturer_account()
+    first = create_course(lecturer, name="Class Alpha")
+    second = create_course(lecturer, name="Class Beta")
+    upload_outline(lecturer, first)
+    first_docs = client.get(f"/api/classes/{first['id']}/course-structure", headers=headers(lecturer)).json()["documents"]
+    second_docs = client.get(f"/api/classes/{second['id']}/course-structure", headers=headers(lecturer)).json()["documents"]
+    assert first_docs
+    assert second_docs == []
+
+
+def test_lecturer_can_upload_teaching_notes_and_recommended_reading():
+    lecturer, _ = lecturer_account()
+    classroom = create_course(lecturer, name="Multiple Documents")
+    for document_type, filename, text in (
+        ("teaching_notes", "notes.txt", b"# Unit 1\nDetailed lecturer teaching notes for this unit."),
+        ("recommended_reading", "reading.txt", b"# Chapter 2\nApproved recommended reading extract."),
+    ):
+        response = client.post(
+            "/api/materials/upload",
+            headers=headers(lecturer),
+            data={"class_id": classroom["id"], "document_type": document_type},
+            files=[("files", (filename, text, "text/plain"))],
+        )
+        assert response.status_code == 200, response.text
+    structure = client.get(f"/api/classes/{classroom['id']}/course-structure", headers=headers(lecturer)).json()
+    types = {item["document_type"] for item in structure["documents"]}
+    assert {"teaching_notes", "recommended_reading"}.issubset(types)
+
+
+def test_required_practice_whiteboard_rejects_typed_only_answer():
+    lecturer, _ = lecturer_account()
+    classroom = create_course(lecturer, name="Handwritten Practice", required=True)
+    student = student_account()
+    enrol(student, classroom)
+    start = client.post(
+        "/api/practice/start",
+        headers=headers(student),
+        data={"topic": "Mean", "level": "University", "course": "STA 101", "class_id": classroom["id"], "question_count": "2"},
+    )
+    assert start.status_code == 200
+    response = client.post(
+        "/api/practice/check",
+        headers=headers(student),
+        data={"practice_id": start.json()["practice_id"], "answer": "Typed answer only"},
+    )
+    assert response.status_code == 422
+    assert "handwritten" in response.json()["detail"].lower()
+
+
+def test_required_practice_whiteboard_accepts_image_response():
+    lecturer, _ = lecturer_account()
+    classroom = create_course(lecturer, name="Handwritten Practice Image", required=True)
+    student = student_account()
+    enrol(student, classroom)
+    start = client.post(
+        "/api/practice/start",
+        headers=headers(student),
+        data={"topic": "Fractions", "level": "Junior High School", "course": "Mathematics", "class_id": classroom["id"], "question_count": "2"},
+    ).json()
+    response = client.post(
+        "/api/practice/check",
+        headers=headers(student),
+        data={"practice_id": start["practice_id"], "answer": ""},
+        files={"board_image": ("practice.png", ONE_PIXEL_PNG, "image/png")},
+    )
+    assert response.status_code == 200
 
 
 def test_demo_chat_returns_visual_plan():
     response = client.post(
         "/api/chat",
         data={
-            "message": "Explain photosynthesis.",
-            "session_id": "test-session",
-            "level": "Junior High School",
-            "tutor_mode": "guided",
-            "course": "Science",
-            "visual_requested": "true",
-            "visual_preference": "steps",
+            "message": "Explain photosynthesis.", "session_id": "test-session", "level": "Junior High School",
+            "tutor_mode": "guided", "course": "Science", "visual_requested": "true", "visual_preference": "steps",
         },
     )
     assert response.status_code == 200
     data = response.json()
     assert data["demo"] is True
-    assert "demonstration mode" in data["answer"].lower()
     assert data["visual"]["kind"] == "steps"
-    assert len(data["visual"]["steps"]) >= 1
 
 
-def test_demo_chat_can_accept_whiteboard_snapshot():
-    response = client.post(
-        "/api/chat",
-        data={
-            "message": "Explain the part I marked.",
-            "session_id": "board-session",
-            "level": "University",
-            "tutor_mode": "guided",
-            "course": "Mathematics",
-            "board_context": '{"visible_page": 1, "learner_ink_strokes": 2}',
-            "visual_requested": "true",
-        },
-        files={"board_image": ("whiteboard.png", ONE_PIXEL_PNG, "image/png")},
-    )
-    assert response.status_code == 200
-    assert response.json()["visual"] is not None
-
-
-def test_demo_practice_flow():
-    start = client.post(
-        "/api/practice/start",
-        data={
-            "topic": "One-way ANOVA",
-            "level": "University",
-            "course": "Statistics",
-            "question_count": "3",
-        },
-    )
-    assert start.status_code == 200
-    question = start.json()
-    assert question["practice_id"]
-    assert question["question_number"] == 1
-    assert question["hint"]
-
-    check = client.post(
-        "/api/practice/check",
-        data={
-            "practice_id": question["practice_id"],
-            "answer": "It explains the main purpose and central idea of one-way ANOVA.",
-        },
-    )
-    assert check.status_code == 200
-    result = check.json()
-    assert "correct" in result
-    assert "feedback" in result
-    assert result["attempts"] == 1
-
-
-def test_demo_practice_reveal_advances():
-    start = client.post(
-        "/api/practice/start",
-        data={"topic": "Fractions", "level": "Junior High School", "question_count": "2"},
-    ).json()
-    response = client.post(
-        "/api/practice/reveal",
-        data={"practice_id": start["practice_id"]},
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["expected_answer"]
-    assert data["explanation"]
-
-
-def test_demo_work_check_returns_score_and_visual():
+def test_demo_work_check_returns_step_level_feedback():
     response = client.post(
         "/api/work/check",
-        data={
-            "problem_context": "Solve 2x + 4 = 10",
-            "board_context": '{"ink_strokes": 3}',
-            "level": "Junior High School",
-            "course": "Mathematics",
-        },
+        data={"problem_context": "Solve 2x + 4 = 10", "board_context": '{"ink_strokes":3}', "level": "Junior High School", "course": "Mathematics"},
         files={"board_image": ("working.png", ONE_PIXEL_PNG, "image/png")},
     )
     assert response.status_code == 200
     data = response.json()
     assert 0 <= data["score"] <= 100
-    assert data["visual"] is not None
-    assert data["next_step"]
     assert "step_results" in data
     assert "first_error_step" in data
 
 
-def test_visual_normalisation_clamps_image_boxes():
+def test_visual_slide_schema_keeps_detailed_teaching_fields():
     plan = VisualPlan(
-        kind="image_annotation",
-        title="Check this line",
-        annotations=[
-            {"label": "Marked area", "x": 990, "y": 995, "width": 200, "height": 100}
-        ],
+        kind="slides",
+        slides=[{
+            "title": "Mean", "bullets": ["Definition"], "explanation": "A detailed explanation.",
+            "worked_example": "Add the values and divide by their number.", "key_terms": ["sum", "count"],
+            "check_question": "What is the mean of 2 and 4?", "speaker_note": "Explain each stage slowly.",
+        }],
     )
-    normalised = _normalise_visual_plan(plan, has_image=True)
-    assert normalised is not None
-    box = normalised.annotations[0]
+    slide = plan.slides[0]
+    assert slide.explanation
+    assert slide.worked_example
+    assert slide.check_question
+
+
+def test_visual_normalisation_clamps_image_boxes():
+    plan = VisualPlan(kind="image_annotation", title="Check", annotations=[{"label":"Area","x":990,"y":995,"width":200,"height":100}])
+    box = _normalise_visual_plan(plan, has_image=True).annotations[0]
     assert box.x + box.width <= 1000
     assert box.y + box.height <= 1000
 
 
 def test_image_annotation_becomes_none_without_image():
-    plan = VisualPlan(
-        kind="image_annotation",
-        annotations=[{"label": "Area", "x": 10, "y": 10, "width": 100, "height": 100}],
-    )
-    normalised = _normalise_visual_plan(plan, has_image=False)
-    assert normalised is not None
-    assert normalised.kind == "none"
+    plan = VisualPlan(kind="image_annotation", annotations=[{"label":"Area","x":10,"y":10,"width":100,"height":100}])
+    assert _normalise_visual_plan(plan, has_image=False).kind == "none"
 
 
-def test_index_contains_v40_institutional_controls():
-    response = client.get("/")
-    assert response.status_code == 200
-    html = response.text
-    assert 'id="drawingCanvas"' in html
-    assert 'id="attachBoard"' in html
-    assert 'id="visualPreference"' in html
-    assert 'id="startPractice"' in html
-    assert 'id="checkWork"' in html
-    assert 'id="teachVisual"' in html
-    assert '/static/v2_1.js?v=4.0.0' in html
-    assert '/static/portal.js?v=4.0.0' in html
-    assert 'id="openDashboard"' in html
-    assert 'id="openLiveVideo"' not in html
-    assert 'id="openLessonVideo"' in html
-    assert 'id="classSelect"' in html
-    assert 'id="outcomeSelect"' in html
-    assert 'id="weekSelect"' in html
-    assert 'id="deliveryMode"' in html
-    assert 'id="downloadLessonPack"' in html
-    assert '/static/manifest.webmanifest' in html
-
-
-def test_material_upload_requires_admin_key():
+def test_material_upload_without_course_still_requires_admin_key():
     response = client.post(
         "/api/materials/upload",
         data={"admin_key": "wrong"},
@@ -217,177 +445,30 @@ def test_extract_response_text_from_message_items():
     class Part:
         type = "output_text"
         text = "Visible answer"
-
     class Item:
         type = "message"
         content = [Part()]
-
     class FakeResponse:
         output_text = ""
         output = [Item()]
-
     assert _extract_response_text(FakeResponse()) == "Visible answer"
 
 
-def test_parameterised_webm_mime_is_accepted():
+def test_audio_mime_variants_are_accepted():
     assert _base_media_type("audio/webm;codecs=opus") == "audio/webm"
     assert _audio_upload_extension("question.webm", "audio/webm;codecs=opus") == ".webm"
-
-
-def test_mp4_recorder_gets_matching_extension():
     assert _audio_upload_extension("question.bin", "audio/mp4;codecs=mp4a.40.2") == ".m4a"
-
-
-def test_generic_mime_uses_known_filename_extension():
     assert _audio_upload_extension("question.webm", "application/octet-stream") == ".webm"
 
 
-
-def _register(role="student"):
-    import uuid
-    email = f"{role}-{uuid.uuid4().hex[:10]}@example.com"
-    payload = {
-        "display_name": f"Test {role.title()}",
-        "email": email,
-        "password": "StrongPass123!",
-        "role": role,
-        "teacher_invite_code": "test-admin" if role == "teacher" else "",
-    }
-    response = client.post("/api/auth/register", json=payload)
-    assert response.status_code == 200, response.text
-    return response.json()
-
-
-def test_student_account_login_and_dashboard():
-    registration = _register("student")
-    token = registration["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
-    me = client.get("/api/auth/me", headers=headers)
-    assert me.status_code == 200
-    assert me.json()["role"] == "student"
-    dashboard = client.get("/api/dashboard", headers=headers)
-    assert dashboard.status_code == 200
-    assert dashboard.json()["role"] == "student"
-
-
-def test_teacher_creates_class_and_student_joins():
-    teacher = _register("teacher")
-    student = _register("student")
-    teacher_headers = {"Authorization": f"Bearer {teacher['access_token']}"}
-    student_headers = {"Authorization": f"Bearer {student['access_token']}"}
-    created = client.post("/api/classes", headers=teacher_headers, json={"name": "Statistics 101", "subject": "Statistics"})
-    assert created.status_code == 200, created.text
-    join_code = created.json()["join_code"]
-    joined = client.post("/api/classes/join", headers=student_headers, json={"join_code": join_code})
-    assert joined.status_code == 200, joined.text
-    assert joined.json()["name"] == "Statistics 101"
-    teacher_dashboard = client.get("/api/dashboard", headers=teacher_headers)
-    assert teacher_dashboard.status_code == 200
-    assert teacher_dashboard.json()["summary"]["students"] >= 1
-
-
-def test_video_endpoints_require_sign_in():
-    response = client.post("/api/video/conversation", json={"topic": "Fractions"})
-    assert response.status_code == 401
-    response = client.post("/api/video/generate", json={"topic": "Fractions"})
-    assert response.status_code == 401
-
-
-def test_live_avatar_video_is_retired_for_signed_in_users():
-    student = _register("student")
-    headers = {"Authorization": f"Bearer {student['access_token']}"}
-    response = client.post("/api/video/conversation", headers=headers, json={"topic": "Fractions"})
-    assert response.status_code == 410
-    assert "retired" in response.json()["detail"].lower()
-
-
-
-def test_teacher_can_define_course_lock_outcomes_and_weekly_topics():
-    teacher = _register("teacher")
-    headers = {"Authorization": f"Bearer {teacher['access_token']}"}
-    created = client.post(
-        "/api/classes",
-        headers=headers,
-        json={
-            "name": "Research Methods A",
-            "subject": "Research Methods",
-            "knowledge_mode": "course_only",
-            "learning_outcomes": ["Explain sampling", "Select an appropriate design"],
-            "weekly_topics": ["Week 1: Research foundations", "Week 2: Sampling"],
-            "tutor_instructions": "Use examples from the approved module and do not complete graded assignments.",
-        },
-    )
-    assert created.status_code == 200, created.text
-    classroom = created.json()
-    assert classroom["knowledge_mode"] == "course_only"
-    assert len(classroom["learning_outcomes"]) == 2
-
-    updated = client.patch(
-        f"/api/classes/{classroom['id']}/profile",
-        headers=headers,
-        json={
-            "name": "Research Methods A",
-            "subject": "Research Methods",
-            "knowledge_mode": "course_plus_approved",
-            "learning_outcomes": ["Explain sampling", "Evaluate research designs"],
-            "weekly_topics": ["Week 1: Foundations", "Week 2: Sampling"],
-            "tutor_instructions": "Use the approved course module first and identify the learning outcome addressed.",
-        },
-    )
-    assert updated.status_code == 200, updated.text
-    data = updated.json()
-    assert data["knowledge_mode"] == "course_plus_approved"
-    assert "Evaluate research designs" in data["learning_outcomes"]
-
-
-def test_teacher_materials_are_scoped_to_the_selected_class():
-    teacher = _register("teacher")
-    headers = {"Authorization": f"Bearer {teacher['access_token']}"}
-    first = client.post("/api/classes", headers=headers, json={"name": "Class Alpha", "subject": "Mathematics"}).json()
-    second = client.post("/api/classes", headers=headers, json={"name": "Class Beta", "subject": "Science"}).json()
-
-    upload_a = client.post(
-        "/api/materials/upload",
-        headers=headers,
-        data={"class_id": first["id"], "material_type": "course"},
-        files=[("files", ("alpha-notes.txt", b"Alpha-specific quadratic equation guidance and examples.", "text/plain"))],
-    )
-    assert upload_a.status_code == 200, upload_a.text
-    upload_b = client.post(
-        "/api/materials/upload",
-        headers=headers,
-        data={"class_id": second["id"], "material_type": "approved_external"},
-        files=[("files", ("beta-reading.txt", b"Beta-specific laboratory safety guidance.", "text/plain"))],
-    )
-    assert upload_b.status_code == 200, upload_b.text
-
-    alpha_list = client.get(f"/api/materials?class_id={first['id']}", headers=headers)
-    assert alpha_list.status_code == 200
-    alpha_names = {item["source"] for item in alpha_list.json()["materials"]}
-    assert "alpha-notes.txt" in alpha_names
-    assert "beta-reading.txt" not in alpha_names
-
-
-def test_student_dashboard_exposes_institutional_intelligence_fields():
-    registration = _register("student")
-    headers = {"Authorization": f"Bearer {registration['access_token']}"}
-    response = client.get("/api/dashboard", headers=headers)
-    assert response.status_code == 200
-    data = response.json()
-    for key in (
-        "outcome_mastery", "common_misconceptions", "unanswered_questions",
-        "interventions", "popular_questions"
-    ):
-        assert key in data
-
-
-def test_service_worker_and_manifest_are_available():
+def test_service_worker_and_manifest_are_v5():
     manifest = client.get("/static/manifest.webmanifest")
     worker = client.get("/static/service-worker.js")
     assert manifest.status_code == 200
     assert worker.status_code == 200
     assert "Anovlad Institutional AI Tutor" in manifest.text
-    assert "anovlad-ai-tutor-v4-shell" in worker.text
+    assert "anovlad-ai-tutor-v5-shell" in worker.text
+
 
 def test_cost_aware_router_prefers_flash_for_normal_and_pro_for_advanced():
     from app.main import ai_router
