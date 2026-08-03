@@ -155,7 +155,7 @@ def test_health_reports_v5_portal_build():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["version"] == "5.0.1"
+    assert data["version"] == "5.0.2"
     assert data["live_video_enabled"] is False
     assert data["institutional_mode"] is True
     assert data["course_lock_enabled"] is True
@@ -180,8 +180,8 @@ def test_index_contains_v5_role_portals_and_two_whiteboards():
         'id="openDashboard"', 'id="classSelect"', 'id="outcomeSelect"', 'id="weekSelect"',
     ):
         assert identifier in html
-    assert '/static/portal.js?v=5.0.1' in html
-    assert '/static/practice_board.js?v=5.0.1' in html
+    assert '/static/portal.js?v=5.0.2' in html
+    assert '/static/practice_board.js?v=5.0.2' in html
     assert 'Administrator sign in' in html
     assert 'Lecturer sign in' in html
     assert 'Student sign in' in html
@@ -444,6 +444,82 @@ def test_material_upload_without_course_still_requires_admin_key():
     assert response.status_code == 401
 
 
+
+def test_administrator_documents_are_private_and_deletable():
+    admin = admin_account()
+    uploaded = client.post(
+        "/api/materials/upload",
+        headers=headers(admin),
+        data={"document_type": "teaching_notes"},
+        files={"files": ("admin-private-note.txt", b"Private administrator reference material.", "text/plain")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    admin_materials = client.get("/api/admin/materials", headers=headers(admin))
+    assert admin_materials.status_code == 200
+    item = next(row for row in admin_materials.json()["materials"] if row["source"] == "admin-private-note.txt")
+    assert item["source_id"].startswith("global::")
+
+    lecturer, _ = lecturer_account("Lecturer Without Admin Documents")
+    classroom = create_course(lecturer, name="Private Repository Isolation")
+    lecturer_materials = client.get(f"/api/materials?class_id={classroom['id']}", headers=headers(lecturer))
+    assert lecturer_materials.status_code == 200
+    assert all(row["source"] != "admin-private-note.txt" for row in lecturer_materials.json()["materials"])
+
+    deleted = client.delete(
+        "/api/admin/materials",
+        headers=headers(admin),
+        params={"source_id": item["source_id"]},
+    )
+    assert deleted.status_code == 200, deleted.text
+    remaining = client.get("/api/admin/materials", headers=headers(admin)).json()["materials"]
+    assert all(row["source"] != "admin-private-note.txt" for row in remaining)
+
+
+def test_lecturer_documents_do_not_cross_lecturer_accounts_and_can_be_deleted():
+    lecturer_a, _ = lecturer_account("Lecturer Alpha")
+    lecturer_b, _ = lecturer_account("Lecturer Beta")
+    class_a = create_course(lecturer_a, name="Alpha Course")
+    class_b = create_course(lecturer_b, name="Beta Course")
+    upload_outline(lecturer_a, class_a)
+
+    own_structure = client.get(f"/api/classes/{class_a['id']}/course-structure", headers=headers(lecturer_a))
+    assert own_structure.status_code == 200
+    documents = own_structure.json()["documents"]
+    assert documents
+
+    other_structure = client.get(f"/api/classes/{class_b['id']}/course-structure", headers=headers(lecturer_b))
+    assert other_structure.status_code == 200
+    assert other_structure.json()["documents"] == []
+
+    forbidden = client.get(f"/api/classes/{class_a['id']}/course-structure", headers=headers(lecturer_b))
+    assert forbidden.status_code == 403
+
+    document_id = documents[0]["id"]
+    deleted = client.delete(f"/api/classes/{class_a['id']}/documents/{document_id}", headers=headers(lecturer_a))
+    assert deleted.status_code == 200, deleted.text
+    after = client.get(f"/api/classes/{class_a['id']}/course-structure", headers=headers(lecturer_a)).json()["documents"]
+    assert after == []
+    indexed = client.get(f"/api/materials?class_id={class_a['id']}", headers=headers(lecturer_a)).json()["materials"]
+    assert indexed == []
+
+
+def test_student_sees_every_enrolled_course_from_multiple_lecturers():
+    lecturer_a, _ = lecturer_account("Lecturer One")
+    lecturer_b, _ = lecturer_account("Lecturer Two")
+    class_a = create_course(lecturer_a, name="Enrolled Course One")
+    class_b = create_course(lecturer_b, name="Enrolled Course Two")
+    student = student_account("Multi-course Student")
+    enrol(student, class_a)
+    enrol(student, class_b)
+    classes = client.get("/api/classes", headers=headers(student))
+    assert classes.status_code == 200
+    ids = {row["id"] for row in classes.json()}
+    assert {class_a["id"], class_b["id"]}.issubset(ids)
+    dashboard = client.get("/api/dashboard", headers=headers(student)).json()
+    dashboard_ids = {row["id"] for row in dashboard["classes"]}
+    assert {class_a["id"], class_b["id"]}.issubset(dashboard_ids)
+    assert dashboard["summary"]["classes"] >= 2
+
 def test_extract_response_text_from_message_items():
     class Part:
         type = "output_text"
@@ -470,7 +546,7 @@ def test_service_worker_and_manifest_are_v5():
     assert manifest.status_code == 200
     assert worker.status_code == 200
     assert "Anovlad Institutional AI Tutor" in manifest.text
-    assert "anovlad-ai-tutor-v5-0-1-shell" in worker.text
+    assert "anovlad-ai-tutor-v5-0-2-shell" in worker.text
 
 
 def test_cost_aware_router_prefers_flash_for_normal_and_pro_for_advanced():
