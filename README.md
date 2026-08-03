@@ -1,6 +1,8 @@
-# Anovlad Institutional AI Tutor v5.0
+# Anovlad Institutional AI Tutor v5.0.1
 
 A Render-ready, role-based AI learning platform for institutions. Version 5.0 separates administration, teaching and learning into dedicated portals and turns uploaded course documents into a structured, selectable AI tutoring environment.
+
+Version 5.0.1 adds clearly labelled Administrator, Lecturer and Student sign-in tabs and checks that the selected sign-in path matches the account role.
 
 ## What is new in v5.0
 
