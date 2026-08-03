@@ -224,13 +224,38 @@ class KnowledgeStore:
         chunks = self.all_chunks()
         if class_id is not None:
             chunks = [c for c in chunks if c.class_id == class_id or (include_global and not c.class_id)]
-        counts: Counter[tuple[str, str, str]] = Counter(
-            (chunk.display_source or chunk.source, chunk.class_id, chunk.material_type) for chunk in chunks
+        counts: Counter[tuple[str, str, str, str]] = Counter(
+            (chunk.source, chunk.display_source or chunk.source, chunk.class_id, chunk.material_type) for chunk in chunks
         )
         return [
-            {"source": source, "chunks": count, "class_id": scope, "material_type": material_type}
-            for (source, scope, material_type), count in sorted(counts.items())
+            {
+                "source_id": source_id,
+                "source": display_source,
+                "chunks": count,
+                "class_id": scope,
+                "material_type": material_type,
+            }
+            for (source_id, display_source, scope, material_type), count in sorted(counts.items(), key=lambda item: (item[0][1], item[0][2], item[0][3]))
         ]
+
+    def delete_source(self, source: str) -> bool:
+        source = str(source or "").strip()
+        if not source:
+            return False
+        if self._use_postgres:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM ai_tutor_knowledge_chunks WHERE source = %s", (source,))
+                    changed = cur.rowcount > 0
+                conn.commit()
+            return changed
+        with self._lock:
+            before = len(self._memory)
+            self._memory = [chunk for chunk in self._memory if chunk.source != source]
+            changed = len(self._memory) != before
+            if changed:
+                self._save_local()
+            return changed
 
     def retrieve(
         self,

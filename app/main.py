@@ -79,7 +79,7 @@ logger = logging.getLogger("ai_tutor")
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title=settings.app_name, version="5.0.1")
+app = FastAPI(title=settings.app_name, version="5.0.2")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 knowledge = KnowledgeStore(database_url=settings.database_url, storage_dir=settings.storage_dir)
@@ -300,7 +300,7 @@ def _course_context(
         limit=6,
         class_id=class_id,
         allowed_types=allowed_types,
-        include_global=True,
+        include_global=False,
     )
     if not results:
         return "No approved course-material extract was retrieved for this question.", []
@@ -1914,18 +1914,48 @@ async def teach_course_section(request: Request, section_id: str, payload: Secti
 @app.get("/api/materials")
 async def list_materials(request: Request, class_id: str = "") -> dict[str, Any]:
     class_id = class_id.strip()
+    user = _optional_user(request)
     if class_id:
-        user = _required_user(request)
+        if not user:
+            raise HTTPException(status_code=401, detail="Sign in to view course materials.")
         classroom = await run_in_threadpool(
             accounts.class_for_user, class_id=class_id, user_id=str(user["id"]), role=str(user["role"])
         )
         if not classroom:
             raise HTTPException(status_code=403, detail="You do not have access to this class.")
-    materials = await run_in_threadpool(
-        knowledge.list_sources, class_id=class_id if class_id else None, include_global=True
-    )
-    documents = await run_in_threadpool(course_content.list_structure, class_id) if class_id else []
-    return {"materials": materials, "documents": documents}
+        materials = await run_in_threadpool(
+            knowledge.list_sources, class_id=class_id, include_global=False
+        )
+        documents = await run_in_threadpool(course_content.list_structure, class_id)
+        return {"materials": materials, "documents": documents}
+
+    # Institution-wide administrator uploads are private to administrators. They are
+    # never mixed into a lecturer's course or a student's enrolled-course library.
+    if user and str(user.get("role")) == "admin":
+        materials = await run_in_threadpool(
+            knowledge.list_sources, class_id="", include_global=False
+        )
+        return {"materials": materials, "documents": []}
+    return {"materials": [], "documents": []}
+
+
+@app.get("/api/admin/materials")
+async def list_admin_materials(request: Request) -> dict[str, Any]:
+    _required_admin(request)
+    materials = await run_in_threadpool(knowledge.list_sources, class_id="", include_global=False)
+    return {"materials": materials}
+
+
+@app.delete("/api/admin/materials")
+async def delete_admin_material(request: Request, source_id: str) -> dict[str, str]:
+    _required_admin(request)
+    source_id = source_id.strip()
+    if not source_id.startswith("global::"):
+        raise HTTPException(status_code=400, detail="Only administrator repository documents can be removed here.")
+    deleted = await run_in_threadpool(knowledge.delete_source, source_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Administrator document not found.")
+    return {"status": "deleted"}
 
 
 @app.post("/api/materials/upload")
@@ -1950,7 +1980,10 @@ async def upload_materials(
         )
         authorised = bool(classroom)
     elif not class_id:
-        authorised = bool(settings.admin_key and admin_key == settings.admin_key)
+        authorised = bool(
+            (user and str(user.get("role")) == "admin")
+            or (settings.admin_key and admin_key == settings.admin_key)
+        )
     if not authorised:
         raise HTTPException(
             status_code=401,
@@ -1968,6 +2001,14 @@ async def upload_materials(
             if len(data) > settings.max_material_mb * 1024 * 1024:
                 raise ValueError(f"File exceeds {settings.max_material_mb} MB")
             if class_id:
+                # Replacing a file with the same name and category must also remove
+                # the previous document's indexed chunks. Otherwise stale text can
+                # continue to influence the tutor after the visible document is gone.
+                existing_documents = await run_in_threadpool(course_content.list_structure, class_id)
+                for existing in existing_documents:
+                    if str(existing.get("filename")) == filename and str(existing.get("document_type")) == document_type:
+                        old_source = f"{class_id}::{document_type}::{existing.get('id', '')}"
+                        await run_in_threadpool(knowledge.delete_source, old_source)
                 document = await run_in_threadpool(
                     course_content.ingest_document,
                     class_id=class_id,
@@ -2032,7 +2073,7 @@ async def upload_materials(
             errors.append({"source": filename, "error": str(exc)})
 
     materials = await run_in_threadpool(
-        knowledge.list_sources, class_id=class_id if class_id else None, include_global=True
+        knowledge.list_sources, class_id=class_id if class_id else "", include_global=False
     )
     documents = await run_in_threadpool(course_content.list_structure, class_id) if class_id else []
     return {"uploaded": uploaded, "errors": errors, "materials": materials, "documents": documents, "classroom": classroom}
@@ -2046,9 +2087,14 @@ async def delete_course_document(request: Request, class_id: str, document_id: s
     )
     if not classroom:
         raise HTTPException(status_code=403, detail="You do not manage this course.")
+    document = await run_in_threadpool(course_content.get_document, document_id)
+    if not document or str(document.get("class_id")) != class_id:
+        raise HTTPException(status_code=404, detail="Course document not found.")
+    internal_source = f"{class_id}::{document.get('document_type', 'teaching_notes')}::{document_id}"
     deleted = await run_in_threadpool(course_content.delete_document, document_id, class_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Course document not found.")
+    await run_in_threadpool(knowledge.delete_source, internal_source)
     return {"status": "deleted"}
 
 
