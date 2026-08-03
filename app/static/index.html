@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0b5d4b" />
   <link rel="manifest" href="/static/manifest.webmanifest" />
   <title>AI Tutor</title>
-  <link rel="stylesheet" href="/static/styles.css?v=5.0.0" />
+  <link rel="stylesheet" href="/static/styles.css?v=5.0.1" />
   <script>
     window.MathJax = {
       tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
@@ -399,7 +399,13 @@
     <form id="authForm" class="dialog-card">
       <header><div><span class="eyebrow">Role-based institutional access</span><h2 id="authTitle">Sign in</h2></div><button type="button" data-close-dialog="authDialog" class="icon-action" aria-label="Close">×</button></header>
       <div class="dialog-body auth-body">
-        <div class="auth-tabs"><button id="showLogin" class="active" type="button">Sign in</button><button id="showRegister" type="button">Student registration</button><button id="showAdminSetup" type="button">First administrator</button></div>
+        <div class="auth-tabs" aria-label="Choose account access">
+          <button id="showAdminLogin" class="role-tab" type="button">Administrator sign in</button>
+          <button id="showLecturerLogin" class="role-tab" type="button">Lecturer sign in</button>
+          <button id="showStudentLogin" class="role-tab active" type="button">Student sign in</button>
+          <button id="showRegister" class="setup-tab" type="button">Student registration</button>
+          <button id="showAdminSetup" class="setup-tab" type="button">First administrator</button>
+        </div>
         <label id="displayNameLabel" class="hidden">Full name<input id="authDisplayName" type="text" maxlength="100" autocomplete="name"></label>
         <label>Email address<input id="authEmail" type="email" maxlength="254" autocomplete="email" required></label>
         <label>Password<input id="authPassword" type="password" minlength="8" maxlength="128" autocomplete="current-password" required></label>
@@ -437,10 +443,10 @@
   </dialog>
 
   <div class="sidebar-backdrop hidden" id="sidebarBackdrop"></div>
-  <script src="/static/portal.js?v=5.0.0"></script>
+  <script src="/static/portal.js?v=5.0.1"></script>
   <script src="/static/app.js?v=5.0.0"></script>
   <script src="/static/v2_1.js?v=5.0.0"></script>
-  <script src="/static/practice_board.js?v=5.0.0"></script>
+  <script src="/static/practice_board.js?v=5.0.1"></script>
   <script>if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/static/service-worker.js').catch(() => {}));</script>
 </body>
 </html>

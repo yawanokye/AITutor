@@ -394,7 +394,9 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .account-actions { display:grid; gap:8px; margin-top:10px; }
 .account-actions.two-column { grid-template-columns:1fr 1fr; }
 .video-actions button { min-height:48px; line-height:1.25; }
-.auth-tabs { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:15px; padding:4px; border-radius:11px; background:#edf4f1; }
+.auth-tabs { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:6px; margin-bottom:15px; padding:4px; border-radius:11px; background:#edf4f1; }
+.auth-tabs .role-tab { grid-column:span 2; }
+.auth-tabs .setup-tab { grid-column:span 3; }
 .auth-tabs button { border:0; border-radius:8px; padding:9px; background:transparent; color:var(--muted); font-weight:750; }
 .auth-tabs button.active { background:white; color:var(--primary-dark); box-shadow:0 2px 8px rgba(20,60,48,.1); }
 .auth-body { display:grid; gap:12px; }
@@ -600,7 +602,8 @@ body.text-only-mode .chat-card { min-height: calc(100vh - 44px); }
   .course-card-head { flex-direction: column; }
   .join-code-box { width: 100%; }
   .course-structure-list { max-height: 50vh; }
-  .auth-tabs { flex-wrap: wrap; }
+  .auth-tabs { grid-template-columns:1fr; }
+  .auth-tabs .role-tab, .auth-tabs .setup-tab { grid-column:1; }
   .detailed-slide { max-height: 64vh; }
 }
 .lecturer-document-manager { margin-top: .7rem; border-top: 1px solid #e2ebe7; padding-top: .6rem; }
