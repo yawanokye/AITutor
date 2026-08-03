@@ -151,10 +151,11 @@
   }
 
   async function deleteDocument(classId, documentId) {
-    if (!confirm('Remove this document and its course sections?')) return;
+    if (!confirm('Delete this course document, its subsections and all indexed extracts?')) return;
     try {
       await api(`/api/classes/${encodeURIComponent(classId)}/documents/${encodeURIComponent(documentId)}`, { method: 'DELETE' });
       await loadCourseStructure(classId);
+      await loadLecturerDocumentSummary(classId);
       window.aiTutorLoadMaterials?.();
     } catch (error) { alert(error.message); }
   }
@@ -193,8 +194,10 @@
     const selected = localStorage.getItem(CLASS_KEY) || '';
     const options = state.classes.map(item => `<option value="${esc(item.id)}">${esc(item.name)}${item.subject ? ` • ${esc(item.subject)}` : ''}</option>`).join('');
     if ($('classSelect')) {
-      $('classSelect').innerHTML = `<option value="">Independent learning</option>${options}`;
+      const placeholder = state.user?.role === 'student' ? 'Select an enrolled course' : 'Independent learning';
+      $('classSelect').innerHTML = `<option value="">${placeholder}</option>${options}`;
       if (state.classes.some(item => item.id === selected)) $('classSelect').value = selected;
+      else if (state.user?.role === 'student' && state.classes.length) $('classSelect').value = state.classes[0].id;
     }
     const lecturerClasses = state.user?.role === 'teacher' ? state.classes : [];
     if ($('materialScope')) {
@@ -366,6 +369,52 @@
     </article>`;
   }
 
+  function adminMaterialRows(items) {
+    if (!items?.length) return '<p class="small-note">No administrator documents have been uploaded.</p>';
+    return `<div class="data-list">${items.map(item => `<div class="data-row admin-material-row"><div><strong>${esc(item.source)}</strong><br><small>${esc((item.material_type || 'course').replaceAll('_', ' '))} • ${esc(item.chunks)} indexed extracts • private administrator repository</small></div><button class="danger-ghost" type="button" data-delete-admin-material="${esc(item.source_id || '')}">Delete</button></div>`).join('')}</div>`;
+  }
+
+  async function loadAdminMaterials() {
+    const container = $('adminMaterialList');
+    if (!container) return;
+    container.innerHTML = '<p class="small-note">Loading administrator documents…</p>';
+    try {
+      const data = await api('/api/admin/materials');
+      container.innerHTML = adminMaterialRows(data.materials || []);
+      container.querySelectorAll('[data-delete-admin-material]').forEach(button => button.addEventListener('click', () => deleteAdminMaterial(button.dataset.deleteAdminMaterial)));
+    } catch (error) { container.innerHTML = `<p class="practice-feedback error">${esc(error.message)}</p>`; }
+  }
+
+  async function uploadAdminMaterials() {
+    const files = [...($('adminMaterialFiles')?.files || [])];
+    const status = $('adminMaterialStatus');
+    if (!files.length) return setStatus('adminMaterialStatus', 'Select at least one administrator document.', 'error');
+    const form = new FormData();
+    form.append('document_type', $('adminMaterialType')?.value || 'teaching_notes');
+    files.forEach(file => form.append('files', file, file.name));
+    setStatus('adminMaterialStatus', 'Uploading to the private administrator repository…');
+    const button = $('uploadAdminMaterials');
+    if (button) button.disabled = true;
+    try {
+      const result = await api('/api/materials/upload', { method: 'POST', body: form });
+      const uploaded = result.uploaded || [];
+      const errors = result.errors || [];
+      setStatus('adminMaterialStatus', `${uploaded.length} document${uploaded.length === 1 ? '' : 's'} uploaded.${errors.length ? ` ${errors.length} issue(s).` : ''}`, errors.length ? 'warning' : 'success');
+      if ($('adminMaterialFiles')) $('adminMaterialFiles').value = '';
+      await loadAdminMaterials();
+    } catch (error) { setStatus('adminMaterialStatus', error.message, 'error'); }
+    finally { if (button) button.disabled = false; }
+  }
+
+  async function deleteAdminMaterial(sourceId) {
+    if (!sourceId || !confirm('Delete this administrator document and all of its indexed extracts?')) return;
+    try {
+      await api(`/api/admin/materials?source_id=${encodeURIComponent(sourceId)}`, { method: 'DELETE' });
+      setStatus('adminMaterialStatus', 'Administrator document deleted.', 'success');
+      await loadAdminMaterials();
+    } catch (error) { setStatus('adminMaterialStatus', error.message, 'error'); }
+  }
+
   function renderAdminDashboard(data) {
     $('dashboardEyebrow').textContent = 'Institutional account control';
     $('dashboardTitle').textContent = 'Administrator portal';
@@ -378,9 +427,12 @@
       <section class="dashboard-section"><h3>Lecturer accounts</h3>${lecturers}</section>
       <section class="dashboard-section"><h3>Courses across the institution</h3>${classes}</section>
       <section class="dashboard-section"><h3>Student accounts</h3>${students}</section>
+      <section class="dashboard-section full-span admin-document-repository"><h3>Administrator document repository</h3><p class="small-note">Documents uploaded here are private to administrators. They are not shown to lecturers or students and are not automatically used in any lecturer's course.</p><div class="class-tools"><label>Document category<select id="adminMaterialType"><option value="teaching_notes">Institutional teaching resource</option><option value="course_outline">Institutional course outline</option><option value="recommended_reading">Institutional recommended reading</option></select></label><label class="file-button"><input id="adminMaterialFiles" type="file" multiple accept=".pdf,.docx,.txt,.md,.csv"><span>Select administrator documents</span></label><button id="uploadAdminMaterials" class="primary" type="button">Upload privately</button></div><div id="adminMaterialStatus" class="small-status"></div><div id="adminMaterialList"><p class="small-note">Loading administrator documents…</p></div></section>
       <section class="dashboard-section"><h3>AI usage and estimated cost</h3>${usage}</section>
     </div>`;
     $('createLecturerButton')?.addEventListener('click', createLecturer);
+    $('uploadAdminMaterials')?.addEventListener('click', uploadAdminMaterials);
+    loadAdminMaterials();
     document.querySelectorAll('[data-toggle-user]').forEach(button => button.addEventListener('click', () => toggleUser(button.dataset.toggleUser, button.dataset.active === 'true')));
     document.querySelectorAll('[data-reset-user]').forEach(button => button.addEventListener('click', () => resetUserPassword(button.dataset.resetUser)));
   }
@@ -419,7 +471,7 @@
     const activity = renderRows(data.recent_activity, item => `<div class="data-row"><div><strong>${esc(item.topic || item.event_type)}</strong><br><small>${item.created_at ? esc(new Date(item.created_at).toLocaleDateString()) : ''}</small></div><strong>${item.score == null ? '' : esc(item.score)+'%'}</strong></div>`, 'No learning activity yet.');
     $('dashboardBody').innerHTML = `<div class="dashboard-summary">${summaryCards(data.summary)}</div>${passwordCard()}<div class="dashboard-grid institutional-dashboard">
       <section class="dashboard-section full-span"><h3>Enrol in a course</h3><div class="class-tools"><input id="joinClassCode" placeholder="Enter lecturer enrolment code"><button id="joinClassButton" class="primary" type="button">Enrol</button></div></section>
-      <section class="dashboard-section full-span"><h3>My courses</h3>${classes}</section>
+      <section class="dashboard-section full-span"><h3>All enrolled courses (${esc(data.classes?.length || 0)})</h3><p class="small-note">Every course joined with a valid lecturer enrolment code is listed below.</p>${classes}</section>
       <section id="studentCourseContents" class="dashboard-section full-span hidden"><h3>Course contents</h3><div id="studentCourseContentsBody"></div></section>
       <section class="dashboard-section"><h3>Learning-outcome mastery</h3>${mastery}</section>
       <section class="dashboard-section"><h3>Topics to revisit</h3>${weak}</section>
