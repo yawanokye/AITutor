@@ -34,7 +34,7 @@ services:
       - key: ADVANCED_ROUTING_MIN_SCORE
         value: 4
       - key: DEEPSEEK_MAX_TOKENS
-        value: 6000
+        value: 7000
 
       - key: OPENAI_API_KEY
         sync: false
@@ -51,7 +51,7 @@ services:
       - key: VISUAL_PLAN_ENABLED
         value: true
       - key: VISUAL_MAX_OUTPUT_TOKENS
-        value: 3500
+        value: 4500
       - key: IMAGE_DETAIL
         value: high
       - key: TRANSCRIBE_MODEL
@@ -65,8 +65,8 @@ services:
         generateValue: true
       - key: ACCESS_TOKEN_MINUTES
         value: 1440
-      - key: TEACHER_INVITE_CODE
-        sync: false
+      - key: ALLOW_PUBLIC_TEACHER_REGISTRATION
+        value: false
       - key: ALLOW_STUDENT_REGISTRATION
         value: true
       - key: REQUIRE_LOGIN_FOR_AI
@@ -75,6 +75,12 @@ services:
         value: 1.00
       - key: ADMIN_KEY
         generateValue: true
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_DISPLAY_NAME
+        value: System Administrator
       - key: DATABASE_URL
         sync: false
 
@@ -95,15 +101,17 @@ services:
         value: true
       - key: COURSE_LOCK_ENABLED
         value: true
+      - key: ALLOW_GENERAL_KNOWLEDGE
+        value: true
       - key: LOW_BANDWIDTH_ENABLED
         value: true
       - key: LOW_DATA_MAX_TOKENS
         value: 1800
       - key: TEXT_ONLY_MAX_TOKENS
         value: 1200
+      - key: MAX_MATERIAL_MB
+        value: 30
       - key: DEMO_MODE
-        value: false
-      - key: ALLOW_GENERAL_KNOWLEDGE
         value: false
       - key: RATE_LIMIT_PER_MINUTE
         value: 30

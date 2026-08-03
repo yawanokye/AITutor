@@ -1,167 +1,211 @@
-# Anovlad Institutional AI Tutor v4.0
+# Anovlad Institutional AI Tutor v5.0
 
-A Render-ready, course-controlled AI learning system for large student populations. Version 4.0 removes one-to-one live avatar video from normal student use and concentrates spending on text tutoring, voice, image analysis, visual explanations, guided practice and reusable class lessons.
+A Render-ready, role-based AI learning platform for institutions. Version 5.0 separates administration, teaching and learning into dedicated portals and turns uploaded course documents into a structured, selectable AI tutoring environment.
 
-## What makes v4.0 different
+## What is new in v5.0
 
-### 1. Course-locked tutoring
+### Administrator portal
 
-Each class has a teacher-controlled knowledge setting:
+The first administrator can be created securely through a one-time bootstrap screen or provisioned from Render environment variables. Administrators can then:
 
-- **Course materials only**: answers are restricted to uploaded official materials.
-- **Course materials plus approved sources**: the tutor may also use teacher-approved external readings.
-- **General knowledge**: available only when the teacher deliberately enables it.
+- Create lecturer accounts without allowing public lecturer registration
+- Generate or enter a temporary lecturer password
+- Copy lecturer credentials for secure delivery
+- Activate or deactivate lecturer accounts
+- Reset lecturer passwords
+- View institutional users, courses, activity and AI usage
 
-Materials can be uploaded globally by an administrator or directly into a teacher's class. Class materials are isolated from other classes.
+Lecturers created by an administrator are required to change their temporary password.
 
-### 2. Outcome-based teaching
+### Lecturer portal
 
-Teachers define:
+Each lecturer can:
 
-- Course learning outcomes
-- Weekly topics
-- Course-specific tutor instructions
-- The permitted knowledge mode
+- Create and manage courses
+- Receive an automatically generated student enrolment code
+- Copy or regenerate an enrolment code
+- Define course objectives and weekly topics
+- Add recommended readings and lecturer-specific tutor instructions
+- Select the permitted knowledge mode for each course
+- Require handwritten responses for practice activities
+- Upload teaching notes, a detailed course outline and recommended reading materials
+- Review the detected document structure before students use it
+- Remove outdated course documents
+- View student progress, misconceptions, weak topics and AI usage
 
-Students select the relevant outcome and weekly topic before asking a question. Tutoring, practice, whiteboard checks and dashboard evidence are then connected to that learning context.
+### Student portal
 
-### 3. Step-level whiteboard assessment
+Students can:
 
-Students can write with a mouse, stylus or finger, or upload a photograph of handwritten work. The tutor can:
+- Create a student account and sign in
+- Enrol in a course using the lecturer-generated code
+- Open a course and browse its uploaded documents
+- Expand documents into sections and subsections
+- Select a subsection and generate a detailed AI lesson grounded in that subsection
+- Receive detailed slides, worked examples, definitions, explanations and self-check questions
+- Ask text or audio questions
+- Upload images or photographs of handwritten work
+- Use the visual explanation whiteboard
+- Use a separate practice whiteboard when handwriting is required
+- Complete guided practice and view progress
 
-- Review steps in their original order
-- Mark each step as correct, warning, error or unreadable
-- Identify the first incorrect step
-- Highlight relevant regions on the image
-- Explain the misconception
-- Suggest the next action without immediately replacing the learner's work
-- Record the result against the selected learning outcome
+## Structured course-content workflow
 
-### 4. Teacher intelligence dashboard
+The lecturer uploads one or more of the following document types:
 
-The teacher dashboard includes:
+1. **Detailed course outline**
+   - Course description
+   - Course objectives or learning outcomes
+   - Weekly topics
+   - Recommended readings
 
-- Student activity and average scores
-- Weak topics
-- Outcome mastery evidence
-- Common misconceptions
-- Students requiring intervention
-- Frequently asked questions
-- Questions the course-locked tutor could not answer from approved materials
-- Provider, model, token and estimated cost summaries
-- Course-profile editing and class join codes
+2. **Teaching notes**
+   - Units, chapters, sections and subsections
+   - Definitions, explanations, examples and exercises
 
-### 5. Low-bandwidth learning
+3. **Recommended reading**
+   - Approved articles, chapters, handouts or other supplementary materials
 
-Students can choose:
+The app extracts headings and builds a nested course structure. When a student selects a section or subsection, the tutor receives:
 
-- **Standard**: full text and visual explanations
-- **Low data**: shorter responses, reduced visual load and no automatic speech
-- **Text only**: compact answers without the whiteboard or voice
+- The selected section text
+- Relevant extracts from approved teaching notes
+- Relevant extracts from recommended readings
+- The course objectives
+- The lecturer's instructions
+- The course knowledge restrictions
 
-The app also provides:
+The tutor then produces a grounded explanation and a detailed slide lesson.
 
-- A service-worker application shell for faster repeat visits
-- Browser recovery of the current workspace
-- Downloadable self-contained HTML lesson packs
-- Reusable class lesson scripts and slides
-- Optional shared MP4 generation for a whole class
+## Preparing documents for accurate section detection
+
+For DOCX files, use Word heading styles:
+
+- **Heading 1** for units or major topics
+- **Heading 2** for sections
+- **Heading 3** for subsections
+
+For PDF, TXT and Markdown files, use clear numbered headings such as:
+
+```text
+Unit 1: Introduction
+1.1 Meaning and scope
+1.2 Key concepts
+1.2.1 Worked example
+```
+
+Use recognisable headings such as **Course Objectives**, **Learning Outcomes**, **Recommended Reading** or **References** in the detailed course outline.
+
+The app extracts selectable text. A scanned PDF containing only page images must first be converted into a searchable PDF with OCR before upload.
+
+Supported course-document formats are PDF, DOCX, TXT, MD and CSV. The default upload limit is 30 MB per file.
+
+## Detailed slide teaching
+
+A subsection lesson can generate 4 to 14 detailed slides. Slides can include:
+
+- A clear teaching title and learning focus
+- Detailed explanatory paragraphs
+- Ordered teaching points
+- Equations
+- Worked examples
+- Key terms and definitions
+- Common misconceptions and corrections
+- Check-your-understanding questions
+- Expanded speaker notes for narrated teaching
+
+Students can move through slides manually or use step-by-step narrated teaching. The slides are generated from the selected subsection and relevant approved readings rather than from a topic title alone.
+
+## Two whiteboards
+
+### Visual explanation whiteboard
+
+Used by the AI Tutor to display:
+
+- Step-by-step calculations
+- Graphs and tables
+- Labelled diagrams
+- Lesson slides
+- Image annotations
+
+### Practice-response whiteboard
+
+A separate student workspace used for handwritten responses. It supports:
+
+- Mouse, touch and stylus writing
+- Pen and eraser
+- Colour selection
+- Undo and clear
+- Submission as a white-background PNG for AI marking
+
+A lecturer can make this whiteboard compulsory for a course. When compulsory, a typed-only practice answer is rejected until the student submits written work from the practice board.
 
 ## AI provider routing
 
-The default cost-control strategy is:
+The cost-control strategy remains:
 
-- **DeepSeek V4 Flash** for ordinary tutoring, practice, marking, whiteboard plans, dashboard-support tasks and lesson scripts
-- **DeepSeek V4 Pro** only when the complexity router detects advanced work
-- **OpenAI vision** for uploaded images, handwritten work, diagrams and screenshots
+- **DeepSeek V4 Flash** for ordinary tutoring, course-section lessons, guided practice, marking, visual plans and lesson scripts
+- **DeepSeek V4 Pro** only when the complexity router identifies advanced work
+- **OpenAI vision** for images, handwriting, diagrams and screenshots
 - **OpenAI transcription** for spoken student questions
 - **OpenAI text-to-speech** for optional spoken answers
 
-The teacher dashboard records model usage and estimated text-generation costs.
-
-## Live video decision
-
-One-to-one Tavus live conversations are retired. The old endpoint returns HTTP 410 with a migration message. The app's animated tutor, text, audio and interactive whiteboard remain available without per-minute avatar charges.
-
-Teachers can create one reusable lesson package for a class. A package always includes a script and slides. Tavus MP4 generation is optional and is used only when `TAVUS_API_KEY` and `TAVUS_VIDEO_REPLICA_ID` are configured.
-
-## Main student features
-
-- Student registration and sign-in
-- Class joining through a code
-- Text and microphone questions
-- Spoken tutor responses
-- Image and camera input
-- Interactive whiteboard
-- Step-by-step explanations
-- Graphs, tables, diagrams and lesson slides
-- Guided practice with hints and marking
-- Step-level work checking
-- Learning-outcome and weekly-topic selection
-- Personal progress dashboard
-- Shared class lesson library
-- Low-data and text-only modes
-- Session recovery and downloadable lesson packs
-
-## Main teacher features
-
-- Teacher registration through a private invitation code
-- Class creation and join-code management
-- Course profile and knowledge-mode control
-- Official and approved-external material uploads
-- Student progress and intervention dashboard
-- Outcome mastery and misconception reports
-- Unanswered-question review
-- AI usage and estimated cost monitoring
-- Reusable lesson package generation
+Live one-to-one avatar video remains disabled. Reusable lesson scripts and slides are available for classes, with optional shared MP4 generation when Tavus credentials are configured.
 
 ## Repository structure
 
 ```text
 app/
-  accounts.py       Accounts, classes, progress, dashboards and lesson records
-  config.py         Environment configuration
-  knowledge.py      Scoped course-material storage and retrieval
-  main.py           FastAPI routes and orchestration
-  prompts.py        Institutional teaching and assessment instructions
-  providers.py      DeepSeek and OpenAI provider routing
-  schemas.py        Validated API and structured-output models
-  tavus.py          Optional reusable MP4 lesson generation
+  accounts.py          Users, roles, courses, enrolment and dashboards
+  course_content.py    Document parsing, hierarchy and section retrieval
+  config.py            Environment settings
+  knowledge.py         Course-scoped retrieval store
+  main.py              FastAPI routes and orchestration
+  prompts.py           Tutor, course-section and slide instructions
+  providers.py         DeepSeek and OpenAI routing
+  schemas.py           API and structured-output models
+  tavus.py             Optional shared lesson-video generation
   static/
     index.html
     styles.css
+    portal.js
     app.js
     v2_1.js
-    portal.js
-    manifest.webmanifest
+    practice_board.js
     service-worker.js
+    manifest.webmanifest
 tests/
 render.yaml
 requirements.txt
 ```
 
-## Render deployment
+## Deploying to Render
 
-This version is designed to use the existing Render PostgreSQL database. It does not declare or create another database.
+This release uses the existing Render PostgreSQL database. It does not create a second database.
 
-1. Extract the package.
-2. Upload the contents to the root of the GitHub `AITutor` repository.
-3. Replace existing files and commit to `main`.
-4. In Render, open `anovlad-ai-tutor`.
-5. Add or confirm the variables below.
-6. Select **Manual Deploy**, then **Clear build cache and deploy**.
-7. After the service becomes Live, open `/health`.
+1. Back up the existing database.
+2. Extract the v5.0 package or patch.
+3. Upload the contents to the root of the GitHub `AITutor` repository.
+4. Replace the older files and commit to `main`.
+5. Open the `anovlad-ai-tutor` web service in Render.
+6. Add or confirm the environment variables below.
+7. Select **Manual Deploy**, then **Clear build cache and deploy**.
+8. Wait until the service is Live.
+9. Open `/health` and confirm version `5.0.0`.
+10. Refresh the browser with `Ctrl + Shift + R`.
 
 Expected health fields include:
 
 ```json
 {
   "status": "ok",
-  "version": "4.0.0",
-  "live_video_enabled": false,
-  "institutional_mode": true,
-  "course_lock_enabled": true,
-  "low_bandwidth_enabled": true
+  "version": "5.0.0",
+  "administrator_portal_enabled": true,
+  "lecturer_managed_enrolment": true,
+  "structured_course_content_enabled": true,
+  "separate_practice_whiteboard_enabled": true,
+  "detailed_slide_teaching_enabled": true,
+  "live_video_enabled": false
 }
 ```
 
@@ -177,7 +221,7 @@ DEEPSEEK_THINKING=false
 DEEPSEEK_ADVANCED_THINKING=false
 ADVANCED_ROUTING_ENABLED=true
 ADVANCED_ROUTING_MIN_SCORE=4
-DEEPSEEK_MAX_TOKENS=6000
+DEEPSEEK_MAX_TOKENS=7000
 
 OPENAI_API_KEY=your OpenAI API key
 AI_MODEL=gpt-5.6-luna
@@ -187,54 +231,111 @@ TTS_MODEL=gpt-4o-mini-tts
 DEFAULT_VOICE=nova
 
 AUTH_SECRET=a long random secret
-TEACHER_INVITE_CODE=a private teacher registration code
+ACCESS_TOKEN_MINUTES=1440
+ALLOW_PUBLIC_TEACHER_REGISTRATION=false
 ALLOW_STUDENT_REGISTRATION=true
 REQUIRE_LOGIN_FOR_AI=true
 STUDENT_MONTHLY_AI_BUDGET_USD=1.00
-ADMIN_KEY=a different long random secret
-DATABASE_URL=the Internal Database URL of the existing Render database
+ADMIN_KEY=a separate long random bootstrap secret
+DATABASE_URL=the existing Render Internal Database URL
 
 INSTITUTIONAL_MODE=true
 COURSE_LOCK_ENABLED=true
+ALLOW_GENERAL_KNOWLEDGE=true
 LOW_BANDWIDTH_ENABLED=true
-LOW_DATA_MAX_TOKENS=1800
-TEXT_ONLY_MAX_TOKENS=1200
-ALLOW_GENERAL_KNOWLEDGE=false
+MAX_MATERIAL_MB=30
 LIVE_VIDEO_ENABLED=false
 LESSON_VIDEO_ENABLED=true
-STUDENT_VIDEO_MONTHLY_LIMIT=0
-TEACHER_VIDEO_MONTHLY_LIMIT=20
 DEMO_MODE=false
 ```
 
-## Optional generated MP4 variables
+`ALLOW_GENERAL_KNOWLEDGE=true` only makes the lecturer-controlled general mode available. It does not automatically remove the course lock from every course. New courses can remain restricted to course materials.
 
-Leave these blank when scripts and slides are sufficient:
+## Creating the first administrator
+
+There are two supported methods.
+
+### Method A: one-time setup through the app
+
+1. Leave `ADMIN_EMAIL` and `ADMIN_PASSWORD` blank.
+2. Copy the generated `ADMIN_KEY` from Render Environment.
+3. Open the app and select **Sign in or register**.
+4. Select **First administrator**.
+5. Enter the administrator name, email, password and `ADMIN_KEY`.
+6. Submit the form.
+
+The bootstrap endpoint works only when no administrator account exists.
+
+### Method B: automatic setup from Render
+
+Set:
 
 ```text
-TAVUS_API_KEY=
-TAVUS_VIDEO_REPLICA_ID=
+ADMIN_EMAIL=administrator@institution.edu
+ADMIN_PASSWORD=a strong initial password
+ADMIN_DISPLAY_NAME=System Administrator
 ```
 
-No Tavus Persona ID, live Replica ID or live-minute setting is needed.
+The app creates the administrator at startup if that email does not already exist. Remove `ADMIN_PASSWORD` from Render after the account has been created and tested.
 
-## First institutional setup
+## Administrator workflow
 
-1. Sign in as a teacher.
-2. Create a class.
-3. Open the dashboard and edit the course profile.
-4. Set the knowledge mode.
-5. Add learning outcomes and weekly topics, one per line.
-6. Add course-specific tutor instructions.
-7. Upload official course materials into that class.
-8. Share the class join code with students.
-9. Review unanswered questions and add missing approved materials where necessary.
+1. Sign in to the **Administrator portal**.
+2. Select **Create lecturer account**.
+3. Enter the lecturer's name and institutional email.
+4. Leave the temporary-password field blank to generate one automatically, or enter a temporary password.
+5. Copy the generated credentials and deliver them privately.
+6. The lecturer signs in and changes the temporary password.
+7. Use the portal to deactivate an account or reset its password when required.
 
-## Existing database upgrade
+Public lecturer registration should remain disabled in production.
 
-The app creates missing v4.0 columns and indexes during startup. Existing users, classes and learning events are retained. The new class fields include knowledge mode, learning outcomes, weekly topics and tutor instructions. Knowledge chunks gain class and material-type scope.
+## Lecturer workflow
 
-Back up the database before a production upgrade.
+1. Sign in to the **Lecturer portal**.
+2. Create a course by entering the course name and subject.
+3. Copy the generated enrolment code.
+4. Configure:
+   - Knowledge mode
+   - Course objectives
+   - Weekly topics
+   - Recommended readings
+   - Tutor instructions
+   - Handwritten-practice requirement
+5. Upload the detailed course outline.
+6. Upload teaching notes.
+7. Upload approved recommended readings.
+8. Review the detected document sections.
+9. Share the enrolment code with the appropriate students.
+10. Review student activity, mastery, misconceptions and unanswered questions.
+
+Uploading a detailed course outline can automatically merge detected objectives and readings into the course profile. The lecturer can still edit the course profile afterwards.
+
+## Student workflow
+
+1. Register as a student and sign in.
+2. Open the **Student portal**.
+3. Enter the lecturer's enrolment code.
+4. Open the enrolled course.
+5. Expand a document and select a section or subsection.
+6. Choose the required lesson detail.
+7. Generate the grounded AI Tutor lesson.
+8. Review the detailed slides and narrated explanation.
+9. Start guided practice where required.
+10. Use the separate practice whiteboard when the course requires handwritten work.
+
+## Database upgrade
+
+At startup, the app creates missing v5.0 tables, columns and indexes. Existing users, courses, enrolments and learning events are retained. New persistent structures include:
+
+- Lecturer accounts created by administrators
+- Account status and temporary-password flags
+- Course recommended readings
+- Course handwriting requirements
+- Uploaded course documents
+- Nested document sections and subsections
+
+Back up the database before deploying to a production service.
 
 ## Local development
 
@@ -263,17 +364,20 @@ python -m compileall -q app
 node --check app/static/app.js
 node --check app/static/v2_1.js
 node --check app/static/portal.js
+node --check app/static/practice_board.js
 pytest -q
 ```
 
-The supplied release passes 24 automated tests. External DeepSeek, OpenAI and Tavus calls require the institution's own API credentials and should be verified after deployment.
+The supplied release passes 26 automated tests. External DeepSeek, OpenAI and optional Tavus calls require the institution's own API credentials and should be verified after deployment.
 
 ## Security and scale
 
-- Keep all API keys in Render Environment, never in GitHub.
-- Keep `REQUIRE_LOGIN_FOR_AI=true` in production.
-- Use a paid Render PostgreSQL plan for a large institutional deployment.
-- Add email verification or institutional single sign-on before broad public registration.
-- Put rate limits and monthly budgets behind authenticated student identities.
-- Pilot with representative courses before enabling 30,000 accounts.
-- Review provider retention and institutional data-governance requirements before uploading sensitive student records.
+- Keep every API key and database URL in Render Environment, never in GitHub.
+- Keep `ALLOW_PUBLIC_TEACHER_REGISTRATION=false`.
+- Deliver temporary lecturer passwords through a private channel.
+- Use institutional email verification or single sign-on before a 30,000-student rollout.
+- Use a paid PostgreSQL service with backups, monitoring and adequate connection limits.
+- Add background workers and object storage for large document and media workloads.
+- Pilot document parsing with representative course outlines and notes.
+- Review copyright permissions before uploading recommended readings.
+- Review institutional privacy, retention and AI-governance requirements before production use.
