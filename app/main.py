@@ -79,7 +79,7 @@ logger = logging.getLogger("ai_tutor")
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title=settings.app_name, version="5.0.0")
+app = FastAPI(title=settings.app_name, version="5.0.1")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 knowledge = KnowledgeStore(database_url=settings.database_url, storage_dir=settings.storage_dir)
