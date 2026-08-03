@@ -23,7 +23,7 @@
     try {
       const visual = state.visualPlan?.kind === 'image_annotation' ? null : state.visualPlan;
       const payload = {
-        version: '2.1.0',
+        version: '5.0.0',
         sessionId: state.sessionId,
         chatLog: state.chatLog.slice(-80),
         lastAnswer: state.lastAnswer,
@@ -149,7 +149,7 @@
     }
     if (plan.kind === 'slides') {
       const slide = plan.slides?.[state.visualIndex];
-      return [intro, slide?.title, ...(slide?.bullets || []), slide?.equation, slide?.speaker_note].filter(Boolean).join('. ');
+      return [intro, slide?.title, ...(slide?.bullets || []), slide?.explanation, slide?.equation, slide?.worked_example, ...(slide?.key_terms || []), slide?.check_question, slide?.speaker_note].filter(Boolean).join('. ');
     }
     return [intro, visualPlanToSpeech(plan)].filter(Boolean).join('. ');
   }
@@ -430,7 +430,8 @@
       current: data,
       hint: data.hint || '',
       pendingNext: null,
-      useBoard: false
+      useBoard: Boolean(window.aiTutorGetSelectedClass?.()?.practice_whiteboard_required),
+      boardRequired: Boolean(window.aiTutorGetSelectedClass?.()?.practice_whiteboard_required)
     };
     el('practicePanel').classList.remove('hidden');
     el('practiceTitle').textContent = data.title || 'Guided practice';
@@ -445,6 +446,8 @@
     el('checkPractice').disabled = false;
     el('revealPractice').disabled = false;
     el('practiceFeedback').className = 'practice-feedback hidden';
+    window.aiTutorPracticeBoard?.reset();
+    if (state.practice.boardRequired) window.aiTutorPracticeBoard?.show(true); else window.aiTutorPracticeBoard?.hide();
     if (data.visual && data.visual.kind !== 'none') {
       renderVisual(data.visual, null);
     } else {
@@ -466,6 +469,9 @@
     form.append('course', el('course').value.trim());
     form.append('level', el('level').value);
     form.append('question_count', el('practiceCount').value);
+    form.append('class_id', el('classSelect')?.value || '');
+    form.append('learning_outcome', el('outcomeSelect')?.value || '');
+    form.append('weekly_topic', el('weekSelect')?.value || '');
     el('startPractice').disabled = true;
     setStatus('Creating a guided practice activity…', true);
     try {
@@ -485,10 +491,13 @@
   function closePractice() {
     state.practice = null;
     el('practicePanel').classList.add('hidden');
+    window.aiTutorPracticeBoard?.hide();
     setStatus('Guided practice closed.');
   }
 
   async function practiceBoardBlob() {
+    const practiceBlob = await window.aiTutorPracticeBoard?.toBlob?.();
+    if (practiceBlob) return practiceBlob;
     if (!state.practice?.useBoard && state.strokes.length === 0) return null;
     const canvas = await captureBoardCanvas();
     return new Promise(resolve => canvas.toBlob(resolve, 'image/png', 0.92));
@@ -501,8 +510,14 @@
       return;
     }
     const answer = el('practiceAnswer').value.trim();
-    if (!answer && !state.practice.useBoard && state.strokes.length === 0) {
-      practiceFeedback('Type an answer or use the whiteboard first.', 'warning');
+    const practiceInk = Boolean(window.aiTutorPracticeBoard?.hasInk?.());
+    if (state.practice.boardRequired && !practiceInk) {
+      practiceFeedback('Your lecturer requires handwritten working on the practice whiteboard.', 'warning');
+      window.aiTutorPracticeBoard?.show(true);
+      return;
+    }
+    if (!answer && !practiceInk && !state.practice.useBoard && state.strokes.length === 0) {
+      practiceFeedback('Type an answer or use the practice whiteboard first.', 'warning');
       return;
     }
     const form = new FormData();
@@ -530,6 +545,7 @@
         el('checkPractice').textContent = 'Next question';
         el('checkPractice').disabled = false;
         clearInk(false);
+        window.aiTutorPracticeBoard?.reset();
         setStatus('Correct. Continue when ready.');
       } else {
         el('checkPractice').disabled = false;
@@ -554,9 +570,10 @@
   function usePracticeWhiteboard() {
     if (!state.practice) return;
     state.practice.useBoard = true;
-    setBoardTool('pen');
-    setMobileView('visual');
-    setStatus('Write your answer on the whiteboard, then return to Conversation and select Check answer.');
+    window.aiTutorPracticeBoard?.show(Boolean(state.practice.boardRequired));
+    window.aiTutorPracticeBoard?.setTool?.('pen');
+    el('practiceWhiteboardWrap')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setStatus('Write your response on the separate practice whiteboard, then select Check answer.');
   }
 
   async function revealPracticeSolution() {

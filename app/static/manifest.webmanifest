@@ -1,7 +1,7 @@
 {
   "name": "Anovlad Institutional AI Tutor",
   "short_name": "AI Tutor",
-  "description": "Course-locked tutoring, visual explanations, guided practice and institutional learning analytics.",
+  "description": "Administrator-managed lecturer accounts, structured course teaching, detailed visual lessons, handwritten practice and institutional learning analytics.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

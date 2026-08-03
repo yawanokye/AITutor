@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0b5d4b" />
   <link rel="manifest" href="/static/manifest.webmanifest" />
   <title>AI Tutor</title>
-  <link rel="stylesheet" href="/static/styles.css?v=4.0.0" />
+  <link rel="stylesheet" href="/static/styles.css?v=5.0.0" />
   <script>
     window.MathJax = {
       tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
@@ -23,7 +23,7 @@
         <div class="brand-mark">AI</div>
         <div>
           <h1 id="appName">AI Tutor</h1>
-          <p>Course-locked, outcome-based learning support.</p>
+          <p>Administrator-managed, lecturer-led and course-grounded learning support.</p>
         </div>
       </div>
 
@@ -41,7 +41,7 @@
         <div id="signedInActions" class="hidden">
           <p class="account-name" id="accountName"></p>
           <div class="account-actions two-column">
-            <button id="openDashboard" class="secondary" type="button">Dashboard</button>
+            <button id="openDashboard" class="secondary" type="button">Portal</button>
             <button id="signOutButton" class="danger-ghost" type="button">Sign out</button>
           </div>
           <div class="account-actions video-actions">
@@ -121,6 +121,17 @@
         <p class="disclosure">The tutor prioritises approved course materials, aligns support to selected learning outcomes, and records progress for authorised teachers. AI output still needs academic judgement.</p>
       </section>
 
+      <section id="courseNavigatorPanel" class="panel course-navigator-panel hidden">
+        <div class="course-navigator-heading">
+          <div><h2>Course contents</h2><p id="courseStructureStatus">Select a course to open its structured teaching materials.</p></div>
+          <button id="refreshCourseStructure" class="icon-action" type="button" title="Refresh course contents">↻</button>
+        </div>
+        <label>Lesson detail
+          <select id="sectionDetail"><option value="standard">Standard explanation</option><option value="detailed" selected>Detailed lesson</option><option value="extended">Extended self-learning lesson</option></select>
+        </label>
+        <div id="courseStructureList" class="course-structure-list"></div>
+      </section>
+
       <section class="panel practice-launch-panel">
         <h2>Guided practice</h2>
         <label>
@@ -140,26 +151,26 @@
         <p class="small-note">The tutor checks each answer, gives hints and tracks progress.</p>
       </section>
 
-      <details class="panel admin-panel">
-        <summary>Course materials</summary>
-        <p>Teachers can upload materials to a selected class. The administrator key is used only for institution-wide materials.</p>
-        <label>
-          Material scope
-          <select id="materialScope"><option value="">Institution-wide materials</option></select>
+      <details id="courseMaterialsPanel" class="panel admin-panel hidden">
+        <summary>Lecturer course documents</summary>
+        <p>Upload teaching notes, a detailed course outline, or recommended reading material to a course you manage. Course outlines are analysed for objectives, topics and reading lists.</p>
+        <label>Course
+          <select id="materialScope"><option value="">Select a course</option></select>
         </label>
-        <label>
-          Material type
-          <select id="materialType"><option value="course">Official course material</option><option value="approved_external">Approved external source</option></select>
+        <label>Document category
+          <select id="documentType">
+            <option value="teaching_notes">Teaching notes</option>
+            <option value="course_outline">Detailed course outline</option>
+            <option value="recommended_reading">Recommended reading material</option>
+          </select>
         </label>
-        <label>
-          Administrator key for institution-wide upload
-          <input id="adminKey" type="password" autocomplete="off" placeholder="Not required for your own class" />
-        </label>
+        <input id="materialType" type="hidden" value="course" />
+        <input id="adminKey" type="hidden" value="" />
         <label class="file-button">
           <input id="materialFiles" type="file" multiple accept=".pdf,.docx,.txt,.md,.csv" />
-          <span>Select learning materials</span>
+          <span>Select teaching documents</span>
         </label>
-        <button class="secondary full" id="uploadMaterials" type="button">Upload materials</button>
+        <button class="secondary full" id="uploadMaterials" type="button">Upload and structure documents</button>
         <div id="materialStatus" class="small-status" aria-live="polite"></div>
         <div id="materialList" class="material-list"></div>
       </details>
@@ -226,6 +237,20 @@
               <p id="practicePrompt"></p>
             </div>
             <textarea id="practiceAnswer" rows="3" maxlength="4000" placeholder="Type your answer, or write on the whiteboard and attach it…"></textarea>
+            <div id="practiceWhiteboardWrap" class="practice-whiteboard-wrap hidden">
+              <div class="practice-whiteboard-heading">
+                <div><strong>Practice response whiteboard</strong><p id="practiceWhiteboardRequirement">Use a mouse, stylus or finger to show your handwritten working.</p></div>
+                <span id="practiceWhiteboardBadge" class="role-badge">Optional</span>
+              </div>
+              <div class="practice-board-toolbar">
+                <button id="practicePen" class="board-tool active" type="button">✎ Pen</button>
+                <button id="practiceEraser" class="board-tool" type="button">⌫ Eraser</button>
+                <label class="colour-control"><span>Colour</span><input id="practicePenColour" type="color" value="#0b5d4b"></label>
+                <button id="practiceUndo" class="board-tool compact" type="button" disabled>↶ Undo</button>
+                <button id="practiceClear" class="board-tool compact" type="button">Clear</button>
+              </div>
+              <div class="practice-canvas-shell"><canvas id="practiceDrawingCanvas" aria-label="Handwritten practice response"></canvas></div>
+            </div>
             <div id="practiceFeedback" class="practice-feedback hidden"></div>
             <div class="practice-actions">
               <button id="checkPractice" class="primary" type="button">Check answer</button>
@@ -372,14 +397,14 @@
 
   <dialog id="authDialog" class="app-dialog">
     <form id="authForm" class="dialog-card">
-      <header><div><span class="eyebrow">Student and teacher access</span><h2 id="authTitle">Sign in</h2></div><button type="button" data-close-dialog="authDialog" class="icon-action" aria-label="Close">×</button></header>
+      <header><div><span class="eyebrow">Role-based institutional access</span><h2 id="authTitle">Sign in</h2></div><button type="button" data-close-dialog="authDialog" class="icon-action" aria-label="Close">×</button></header>
       <div class="dialog-body auth-body">
-        <div class="auth-tabs"><button id="showLogin" class="active" type="button">Sign in</button><button id="showRegister" type="button">Register</button></div>
+        <div class="auth-tabs"><button id="showLogin" class="active" type="button">Sign in</button><button id="showRegister" type="button">Student registration</button><button id="showAdminSetup" type="button">First administrator</button></div>
         <label id="displayNameLabel" class="hidden">Full name<input id="authDisplayName" type="text" maxlength="100" autocomplete="name"></label>
         <label>Email address<input id="authEmail" type="email" maxlength="254" autocomplete="email" required></label>
         <label>Password<input id="authPassword" type="password" minlength="8" maxlength="128" autocomplete="current-password" required></label>
-        <label id="roleLabel" class="hidden">Account type<select id="authRole"><option value="student">Student</option><option value="teacher">Teacher</option></select></label>
-        <label id="teacherCodeLabel" class="hidden">Teacher invitation code<input id="teacherInviteCode" type="password" maxlength="128" autocomplete="off"></label>
+        <label id="adminBootstrapKeyLabel" class="hidden">Administrator bootstrap key<input id="adminBootstrapKey" type="password" maxlength="256" autocomplete="off"></label>
+        <p id="authHelp" class="small-note">Administrators and lecturers sign in with accounts already created for them. Students may register directly.</p>
         <div id="authStatus" class="small-status" aria-live="polite"></div>
       </div>
       <footer><button type="button" data-close-dialog="authDialog" class="secondary">Cancel</button><button id="submitAuth" type="submit" class="primary">Sign in</button></footer>
@@ -388,7 +413,7 @@
 
   <dialog id="dashboardDialog" class="app-dialog dashboard-dialog">
     <div class="dialog-card wide">
-      <header><div><span class="eyebrow">Progress and class management</span><h2>Learning dashboard</h2></div><button type="button" data-close-dialog="dashboardDialog" class="icon-action" aria-label="Close">×</button></header>
+      <header><div><span id="dashboardEyebrow" class="eyebrow">Role-based workspace</span><h2 id="dashboardTitle">Portal</h2></div><button type="button" data-close-dialog="dashboardDialog" class="icon-action" aria-label="Close">×</button></header>
       <div id="dashboardBody" class="dialog-body dashboard-body"><p>Loading dashboard…</p></div>
       <footer><button type="button" data-close-dialog="dashboardDialog" class="secondary">Close</button></footer>
     </div>
@@ -412,9 +437,10 @@
   </dialog>
 
   <div class="sidebar-backdrop hidden" id="sidebarBackdrop"></div>
-  <script src="/static/portal.js?v=4.0.0"></script>
-  <script src="/static/app.js?v=4.0.0"></script>
-  <script src="/static/v2_1.js?v=4.0.0"></script>
+  <script src="/static/portal.js?v=5.0.0"></script>
+  <script src="/static/app.js?v=5.0.0"></script>
+  <script src="/static/v2_1.js?v=5.0.0"></script>
+  <script src="/static/practice_board.js?v=5.0.0"></script>
   <script>if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/static/service-worker.js').catch(() => {}));</script>
 </body>
 </html>

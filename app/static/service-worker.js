@@ -1,10 +1,11 @@
-const CACHE_NAME = "anovlad-ai-tutor-v4-shell";
+const CACHE_NAME = "anovlad-ai-tutor-v5-shell";
 const SHELL = [
   "/",
   "/static/styles.css",
   "/static/app.js",
   "/static/v2_1.js",
   "/static/portal.js",
+  "/static/practice_board.js",
   "/static/manifest.webmanifest"
 ];
 

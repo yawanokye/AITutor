@@ -437,6 +437,7 @@ async function uploadMaterials() {
   form.append('admin_key', adminKey);
   form.append('class_id', classId);
   form.append('material_type', el('materialType')?.value || 'course');
+  form.append('document_type', el('documentType')?.value || 'teaching_notes');
   files.forEach(file => form.append('files', file, file.name));
   el('materialStatus').textContent = 'Reading, scoping and indexing the materials…';
   try {
@@ -783,16 +784,20 @@ function renderImageAnnotation(plan) {
 }
 
 function renderSlide(plan) {
-  const slide = (plan.slides || [])[state.visualIndex] || { title: plan.title || 'Lesson', bullets: [], equation: '', speaker_note: '' };
+  const slide = (plan.slides || [])[state.visualIndex] || { title: plan.title || 'Lesson', bullets: [], equation: '', explanation: '', worked_example: '', key_terms: [], check_question: '', speaker_note: '' };
   const bullets = (slide.bullets || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
-  const equation = slide.equation ? `<div class="slide-equation">\\[${escapeHtml(slide.equation)}\\]</div>` : '';
-  const note = slide.speaker_note ? `<p class="slide-note">${escapeHtml(slide.speaker_note)}</p>` : '';
+  const equation = slide.equation ? `<div class="slide-equation">\[${escapeHtml(slide.equation)}\]</div>` : '';
+  const explanation = slide.explanation ? `<div class="slide-explanation"><h4>Detailed explanation</h4><p>${escapeHtml(slide.explanation)}</p></div>` : '';
+  const example = slide.worked_example ? `<div class="slide-example"><h4>Worked example or application</h4><p>${escapeHtml(slide.worked_example)}</p></div>` : '';
+  const terms = (slide.key_terms || []).length ? `<div class="slide-key-terms"><strong>Key terms</strong>${slide.key_terms.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : '';
+  const check = slide.check_question ? `<div class="slide-check"><strong>Check your understanding</strong><p>${escapeHtml(slide.check_question)}</p></div>` : '';
+  const note = slide.speaker_note ? `<details class="slide-note" open><summary>Teaching notes</summary><p>${escapeHtml(slide.speaker_note)}</p></details>` : '';
   visualContent.innerHTML = `
-    <div class="lesson-slide">
-      <span class="slide-number">Lesson slide ${state.visualIndex + 1}</span>
+    <div class="lesson-slide detailed-slide">
+      <span class="slide-number">Detailed lesson slide ${state.visualIndex + 1}</span>
       <h3>${escapeHtml(slide.title)}</h3>
-      ${bullets ? `<ul>${bullets}</ul>` : ''}
-      ${equation}${note}
+      ${bullets ? `<ul class="slide-bullets">${bullets}</ul>` : ''}
+      ${equation}${explanation}${example}${terms}${check}${note}
     </div>`;
 }
 
@@ -805,7 +810,7 @@ function visualPlanToSpeech(plan) {
   }
   if (plan.kind === 'slides') {
     const slide = plan.slides?.[state.visualIndex];
-    return [intro, slide?.title, ...(slide?.bullets || []), slide?.equation, slide?.speaker_note].filter(Boolean).join('. ');
+    return [intro, slide?.title, ...(slide?.bullets || []), slide?.explanation, slide?.equation, slide?.worked_example, ...(slide?.key_terms || []), slide?.check_question, slide?.speaker_note].filter(Boolean).join('. ');
   }
   if (plan.kind === 'table') return [intro, 'The table compares the following headings', ...(plan.table_headers || [])].filter(Boolean).join('. ');
   if (plan.kind === 'graph') return [intro, `Horizontal axis: ${plan.x_label}`, `Vertical axis: ${plan.y_label}`, ...(plan.series || []).map(item => `Series: ${item.name}`)].filter(Boolean).join('. ');
@@ -1074,6 +1079,11 @@ function applyDeliveryMode(mode = el('deliveryMode')?.value || 'standard') {
   window.dispatchEvent(new CustomEvent('ai-tutor-delivery-mode', { detail: { mode } }));
 }
 window.aiTutorApplyDeliveryMode = applyDeliveryMode;
+window.aiTutorAddMessage = addMessage;
+window.aiTutorRenderVisual = renderVisual;
+window.aiTutorSetMobileView = setMobileView;
+window.aiTutorSetStatus = setStatus;
+window.aiTutorVisualPlanToSpeech = visualPlanToSpeech;
 el('deliveryMode')?.addEventListener('change', event => applyDeliveryMode(event.target.value));
 el('classSelect')?.addEventListener('change', () => { window.aiTutorClassChanged?.(); loadMaterials(); });
 
