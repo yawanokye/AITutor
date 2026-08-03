@@ -155,7 +155,7 @@ def test_health_reports_v5_portal_build():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["version"] == "5.0.0"
+    assert data["version"] == "5.0.1"
     assert data["live_video_enabled"] is False
     assert data["institutional_mode"] is True
     assert data["course_lock_enabled"] is True
@@ -180,8 +180,11 @@ def test_index_contains_v5_role_portals_and_two_whiteboards():
         'id="openDashboard"', 'id="classSelect"', 'id="outcomeSelect"', 'id="weekSelect"',
     ):
         assert identifier in html
-    assert '/static/portal.js?v=5.0.0' in html
-    assert '/static/practice_board.js?v=5.0.0' in html
+    assert '/static/portal.js?v=5.0.1' in html
+    assert '/static/practice_board.js?v=5.0.1' in html
+    assert 'Administrator sign in' in html
+    assert 'Lecturer sign in' in html
+    assert 'Student sign in' in html
     assert 'Teacher invitation code' not in html
     assert 'openLiveVideo' not in html
 
@@ -467,7 +470,7 @@ def test_service_worker_and_manifest_are_v5():
     assert manifest.status_code == 200
     assert worker.status_code == 200
     assert "Anovlad Institutional AI Tutor" in manifest.text
-    assert "anovlad-ai-tutor-v5-shell" in worker.text
+    assert "anovlad-ai-tutor-v5-0-1-shell" in worker.text
 
 
 def test_cost_aware_router_prefers_flash_for_normal_and_pro_for_advanced():
