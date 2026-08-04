@@ -92,7 +92,7 @@ def student_account(name="Test Student"):
     return response.json()
 
 
-def create_course(lecturer, *, name="Statistics 101", required=False):
+def create_course(lecturer, *, name="Statistics 101", required=False, response_mode="student_choice", weekly_topics=None, outcomes=None):
     response = client.post(
         "/api/classes",
         headers=headers(lecturer),
@@ -100,11 +100,12 @@ def create_course(lecturer, *, name="Statistics 101", required=False):
             "name": name,
             "subject": "STA 101",
             "knowledge_mode": "course_only",
-            "learning_outcomes": [],
-            "weekly_topics": [],
+            "learning_outcomes": outcomes or [],
+            "weekly_topics": weekly_topics or [],
             "recommended_readings": [],
             "tutor_instructions": "Use the uploaded lecturer notes as the main authority.",
             "practice_whiteboard_required": required,
+            "practice_response_mode": "whiteboard" if required else response_mode,
         },
     )
     assert response.status_code == 200, response.text
@@ -157,7 +158,7 @@ def test_health_reports_v5_portal_build():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["version"] == "5.0.3"
+    assert data["version"] == "5.1.0"
     assert data["live_video_enabled"] is False
     assert data["institutional_mode"] is True
     assert data["course_lock_enabled"] is True
@@ -182,8 +183,8 @@ def test_index_contains_v5_role_portals_and_two_whiteboards():
         'id="openDashboard"', 'id="classSelect"', 'id="outcomeSelect"', 'id="weekSelect"',
     ):
         assert identifier in html
-    assert '/static/portal.js?v=5.0.3' in html
-    assert '/static/practice_board.js?v=5.0.3' in html
+    assert '/static/portal.js?v=5.1.0' in html
+    assert '/static/practice_board.js?v=5.1.0' in html
     assert 'Administrator sign in' in html
     assert 'Lecturer sign in' in html
     assert 'Student sign in' in html
@@ -607,7 +608,7 @@ def test_service_worker_and_manifest_are_v5():
     assert manifest.status_code == 200
     assert worker.status_code == 200
     assert "Anovlad Institutional AI Tutor" in manifest.text
-    assert "anovlad-ai-tutor-v5-0-3-shell" in worker.text
+    assert "anovlad-ai-tutor-v5-1-0-shell" in worker.text
 
 
 def test_cost_aware_router_prefers_flash_for_normal_and_pro_for_advanced():
@@ -616,3 +617,145 @@ def test_cost_aware_router_prefers_flash_for_normal_and_pro_for_advanced():
     advanced_model, _ = ai_router.choose_deepseek_model("Derive an advanced stochastic differential equation and prove the theorem using eigenvalues.")
     assert normal_model == "deepseek-v4-flash"
     assert advanced_model == "deepseek-v4-pro"
+
+
+def weekly_outline_docx_bytes():
+    output = BytesIO()
+    document = Document()
+    document.add_heading("STA 102 Weekly Course Outline", 0)
+    document.add_heading("Course Objectives", 1)
+    document.add_paragraph("1. Explain the role of statistics in decision making")
+    document.add_paragraph("2. Classify data correctly")
+    table = document.add_table(rows=1, cols=3)
+    table.rows[0].cells[0].text = "Week"
+    table.rows[0].cells[1].text = "Topic"
+    table.rows[0].cells[2].text = "Activities"
+    rows = [
+        ("1", "Introduction to Statistics", "Meaning of statistics; Uses of statistics; Limitations"),
+        ("2", "Types of Data", "Qualitative data; Quantitative data; Levels of measurement"),
+    ]
+    for week, topic, activities in rows:
+        cells = table.add_row().cells
+        cells[0].text = week
+        cells[1].text = topic
+        cells[2].text = activities
+    document.save(output)
+    return output.getvalue()
+
+
+def test_v51_student_workspace_controls_are_present():
+    html = client.get("/").text
+    for identifier in (
+        'id="practiceResponseChooser"', 'id="practiceRecordResponse"',
+        'id="practiceAudioPreview"', 'id="practiceAddSpace"',
+        'id="practiceFullscreen"', 'id="fullscreenBoard"',
+    ):
+        assert identifier in html
+    assert '/static/v2_1.js?v=5.1.0' in html
+    css = client.get('/static/styles.css').text
+    assert 'body.student-interface' in css
+    assert '.practice-whiteboard-wrap:fullscreen' in css
+    assert 'overflow-y: auto' in css
+
+
+def test_lecturer_can_require_each_practice_response_mode():
+    lecturer, _ = lecturer_account()
+    student = student_account()
+    for mode in ("typed", "voice", "whiteboard"):
+        classroom = create_course(lecturer, name=f"{mode.title()} Practice Course", response_mode=mode)
+        enrol(student, classroom)
+        response = client.post(
+            "/api/practice/start",
+            headers=headers(student),
+            data={
+                "topic": "Measures of central tendency",
+                "course": classroom["name"],
+                "level": "University",
+                "question_count": 2,
+                "class_id": classroom["id"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        question_data = response.json()
+        assert question_data["response_mode"] == mode
+        assert question_data["allowed_response_modes"] == [mode]
+        empty_check = client.post(
+            "/api/practice/check",
+            headers=headers(student),
+            data={"practice_id": question_data["practice_id"], "answer": ""},
+        )
+        assert empty_check.status_code == 422
+
+
+def test_student_choice_practice_allows_typing_voice_and_whiteboard():
+    lecturer, _ = lecturer_account()
+    classroom = create_course(lecturer, name="Choice Practice Course", response_mode="student_choice")
+    student = student_account()
+    enrol(student, classroom)
+    response = client.post(
+        "/api/practice/start",
+        headers=headers(student),
+        data={"topic": "Sampling", "class_id": classroom["id"], "question_count": 2},
+    )
+    assert response.status_code == 200
+    assert response.json()["response_mode"] == "student_choice"
+    assert response.json()["allowed_response_modes"] == ["typed", "voice", "whiteboard"]
+
+
+def test_weekly_course_outline_table_displays_weeks_and_selectable_subunits():
+    lecturer, _ = lecturer_account()
+    classroom = create_course(lecturer, name="Weekly Outline Course")
+    upload = client.post(
+        "/api/materials/upload",
+        headers=headers(lecturer),
+        data={"class_id": classroom["id"], "document_type": "course_outline"},
+        files=[(
+            "files",
+            ("weekly-outline.docx", weekly_outline_docx_bytes(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        )],
+    )
+    assert upload.status_code == 200, upload.text
+    student = student_account()
+    enrol(student, classroom)
+    structure = client.get(f"/api/classes/{classroom['id']}/course-structure", headers=headers(student))
+    assert structure.status_code == 200
+    plan = structure.json()["weekly_plan"]
+    assert len(plan) >= 2
+    assert plan[0]["title"].startswith("Week 1")
+    assert plan[0]["subunits"]
+    first_subunit = plan[0]["subunits"][0]
+    assert first_subunit["id"]
+    lesson = client.post(
+        f"/api/course/sections/{first_subunit['id']}/teach",
+        headers=headers(student),
+        json={"level": "University", "detail": "detailed"},
+    )
+    assert lesson.status_code == 200, lesson.text
+    assert lesson.json()["visual"]["kind"] == "slides"
+
+
+def test_course_without_readings_generates_weekly_lessons_from_outcomes():
+    lecturer, _ = lecturer_account()
+    classroom = create_course(
+        lecturer,
+        name="Outcome Generated Course",
+        weekly_topics=["Foundations of research", "Developing research questions"],
+        outcomes=["Explain the research process", "Formulate answerable research questions"],
+    )
+    student = student_account()
+    enrol(student, classroom)
+    structure = client.get(f"/api/classes/{classroom['id']}/course-structure", headers=headers(student)).json()
+    assert len(structure["weekly_plan"]) == 2
+    assert all(item["generated"] for item in structure["weekly_plan"])
+    topic = structure["weekly_plan"][0]
+    lesson = client.post(
+        f"/api/course/sections/{topic['id']}/teach",
+        headers=headers(student),
+        json={"level": "University", "detail": "extended"},
+    )
+    assert lesson.status_code == 200, lesson.text
+    data = lesson.json()
+    assert data["generated_from_outcomes"] is True
+    assert data["sources"] == ["Lecturer course objectives, expected outcomes and weekly plan"]
+    assert data["visual"]["kind"] == "slides"
+    assert data["answer"]
