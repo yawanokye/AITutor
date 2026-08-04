@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0b5d4b" />
   <link rel="manifest" href="/static/manifest.webmanifest" />
   <title>AI Tutor</title>
-  <link rel="stylesheet" href="/static/styles.css?v=5.0.3" />
+  <link rel="stylesheet" href="/static/styles.css?v=5.1.0" />
   <script>
     window.MathJax = {
       tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
@@ -51,7 +51,7 @@
       </section>
 
       <section class="panel settings-panel">
-        <h2>Learning settings</h2>
+        <h2 id="courseSettingsTitle">Learning settings</h2>
         <label>
           My class or course
           <select id="classSelect"><option value="">Independent learning</option></select>
@@ -65,11 +65,11 @@
           Weekly topic
           <select id="weekSelect"><option value="">Select a weekly topic</option></select>
         </label>
-        <label>
+        <label class="advanced-learning-setting">
           Course or subject
           <input id="course" type="text" placeholder="e.g. Advanced Calculus" maxlength="160" />
         </label>
-        <label>
+        <label class="advanced-learning-setting">
           Education level
           <select id="level">
             <option>Junior High School</option>
@@ -95,7 +95,7 @@
             <option value="text_only">Text-only mode</option>
           </select>
         </label>
-        <label>
+        <label class="advanced-learning-setting">
           Visual format
           <select id="visualPreference">
             <option value="auto" selected>Automatic</option>
@@ -106,7 +106,7 @@
             <option value="slides">Lesson slides</option>
           </select>
         </label>
-        <label class="toggle-row">
+        <label class="toggle-row advanced-learning-setting">
           <input id="visualRequested" type="checkbox" checked />
           <span>Create a visual explanation</span>
         </label>
@@ -236,7 +236,26 @@
               <span id="practiceDifficulty" class="difficulty-badge">Standard</span>
               <p id="practicePrompt"></p>
             </div>
-            <textarea id="practiceAnswer" rows="3" maxlength="4000" placeholder="Type your answer, or write on the whiteboard and attach it…"></textarea>
+            <div id="practiceResponseChooser" class="practice-response-chooser">
+              <div><strong>How to respond</strong><small id="practiceResponseInstruction">Choose typing, voice recording or handwriting.</small></div>
+              <div id="practiceResponseTabs" class="practice-response-tabs">
+                <button type="button" data-practice-response="typed">⌨ Type</button>
+                <button type="button" data-practice-response="voice">🎙 Record</button>
+                <button type="button" data-practice-response="whiteboard">✎ Write</button>
+              </div>
+              <span id="practiceResponseRequirementBadge" class="role-badge">Student choice</span>
+            </div>
+            <div id="practiceTypedResponse" class="practice-response-area">
+              <textarea id="practiceAnswer" rows="4" maxlength="4000" placeholder="Type your answer here…"></textarea>
+            </div>
+            <div id="practiceVoiceResponse" class="practice-response-area hidden">
+              <div class="practice-voice-recorder">
+                <button id="practiceRecordResponse" class="secondary" type="button"><span id="practiceRecordIcon">🎙</span> <span id="practiceRecordLabel">Record response</span></button>
+                <button id="practiceClearRecording" class="danger-ghost hidden" type="button">Remove recording</button>
+                <span id="practiceRecordingStatus">No response recorded.</span>
+              </div>
+              <audio id="practiceAudioPreview" controls class="hidden"></audio>
+            </div>
             <div id="practiceWhiteboardWrap" class="practice-whiteboard-wrap hidden">
               <div class="practice-whiteboard-heading">
                 <div><strong>Practice response whiteboard</strong><p id="practiceWhiteboardRequirement">Use a mouse, stylus or finger to show your handwritten working.</p></div>
@@ -247,9 +266,11 @@
                 <button id="practiceEraser" class="board-tool" type="button">⌫ Eraser</button>
                 <label class="colour-control"><span>Colour</span><input id="practicePenColour" type="color" value="#0b5d4b"></label>
                 <button id="practiceUndo" class="board-tool compact" type="button" disabled>↶ Undo</button>
+                <button id="practiceAddSpace" class="board-tool compact" type="button">＋ Writing space</button>
+                <button id="practiceFullscreen" class="board-tool compact" type="button">⛶ Full screen</button>
                 <button id="practiceClear" class="board-tool compact" type="button">Clear</button>
               </div>
-              <div class="practice-canvas-shell"><canvas id="practiceDrawingCanvas" aria-label="Handwritten practice response"></canvas></div>
+              <div class="practice-canvas-shell" id="practiceCanvasShell"><canvas id="practiceDrawingCanvas" aria-label="Handwritten practice response"></canvas></div>
             </div>
             <div id="practiceFeedback" class="practice-feedback hidden"></div>
             <div class="practice-actions">
@@ -299,7 +320,7 @@
             <div class="visual-header-actions">
               <button id="editVisual" class="icon-action" type="button" title="Edit graph or table data">✎</button>
               <button id="checkWork" class="icon-action" type="button" title="Check my whiteboard work">✓</button>
-              <button id="fullscreenBoard" class="icon-action" type="button" title="Open whiteboard full screen">⛶</button>
+              <button id="fullscreenBoard" class="icon-action fullscreen-action" type="button" title="Open teaching whiteboard full screen">⛶ <span>Full screen</span></button>
               <button id="downloadBoard" class="icon-action" type="button" title="Download whiteboard as PNG">⇩</button>
             </div>
           </header>
@@ -443,10 +464,10 @@
   </dialog>
 
   <div class="sidebar-backdrop hidden" id="sidebarBackdrop"></div>
-  <script src="/static/portal.js?v=5.0.3"></script>
-  <script src="/static/app.js?v=5.0.3"></script>
-  <script src="/static/v2_1.js?v=5.0.3"></script>
-  <script src="/static/practice_board.js?v=5.0.3"></script>
+  <script src="/static/portal.js?v=5.1.0"></script>
+  <script src="/static/app.js?v=5.1.0"></script>
+  <script src="/static/v2_1.js?v=5.1.0"></script>
+  <script src="/static/practice_board.js?v=5.1.0"></script>
   <script>if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/static/service-worker.js').catch(() => {}));</script>
 </body>
 </html>

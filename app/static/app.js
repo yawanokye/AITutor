@@ -795,7 +795,7 @@ function renderSlide(plan) {
   const example = slide.worked_example ? `<div class="slide-example"><h4>Worked example or application</h4><p>${escapeHtml(slide.worked_example)}</p></div>` : '';
   const terms = (slide.key_terms || []).length ? `<div class="slide-key-terms"><strong>Key terms</strong>${slide.key_terms.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : '';
   const check = slide.check_question ? `<div class="slide-check"><strong>Check your understanding</strong><p>${escapeHtml(slide.check_question)}</p></div>` : '';
-  const note = slide.speaker_note ? `<details class="slide-note" open><summary>Teaching notes</summary><p>${escapeHtml(slide.speaker_note)}</p></details>` : '';
+  const note = slide.speaker_note ? `<div class="slide-note slide-teaching-note"><h4>Detailed teaching notes</h4><p>${escapeHtml(slide.speaker_note)}</p></div>` : '';
   visualContent.innerHTML = `
     <div class="lesson-slide detailed-slide">
       <span class="slide-number">Detailed lesson slide ${state.visualIndex + 1}</span>
@@ -999,12 +999,16 @@ async function attachBoardToQuestion() {
 }
 
 async function toggleFullscreenBoard() {
+  const card = el('visualCard');
   try {
-    if (!document.fullscreenElement) await el('visualCard').requestFullscreen();
-    else await document.exitFullscreen();
+    if (document.fullscreenElement === card) await document.exitFullscreen();
+    else if (card.requestFullscreen) await card.requestFullscreen();
+    else card.classList.toggle('board-expanded');
   } catch (error) {
-    setStatus(`Full-screen mode is unavailable. ${error.message}`);
+    card.classList.toggle('board-expanded');
+    setStatus(card.classList.contains('board-expanded') ? 'Whiteboard expanded.' : 'Whiteboard restored.');
   }
+  setTimeout(resizeDrawingCanvas, 100);
 }
 
 sendButton.addEventListener('click', sendQuestion);
@@ -1063,7 +1067,7 @@ backdrop.addEventListener('click', closeSidebar);
 const boardResizeObserver = new ResizeObserver(() => resizeDrawingCanvas());
 boardResizeObserver.observe(visualViewport);
 window.addEventListener('resize', resizeDrawingCanvas);
-document.addEventListener('fullscreenchange', () => setTimeout(resizeDrawingCanvas, 100));
+document.addEventListener('fullscreenchange', () => { el('visualCard')?.classList.remove('board-expanded'); setTimeout(resizeDrawingCanvas, 100); });
 
 function applyDeliveryMode(mode = el('deliveryMode')?.value || 'standard') {
   document.body.classList.toggle('low-data-mode', mode === 'low_data');

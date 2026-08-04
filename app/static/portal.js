@@ -95,16 +95,19 @@
   function renderCourseStructure(data) {
     const list = $('courseStructureList');
     const documents = data.documents || [];
+    const weeklyPlan = data.weekly_plan || [];
     const classroom = data.classroom || selectedClass();
-    $('courseStructureStatus').textContent = documents.length
-      ? `${documents.length} structured document${documents.length === 1 ? '' : 's'}. Select a subsection for a grounded AI lesson.`
-      : 'The lecturer has not uploaded structured teaching documents for this course yet.';
-    if (!documents.length) {
-      list.innerHTML = '<div class="course-empty">No course outline, teaching notes or recommended readings have been uploaded.</div>';
-      return;
-    }
+    const sourceMessage = documents.length
+      ? `${documents.length} structured document${documents.length === 1 ? '' : 's'} available.`
+      : weeklyPlan.length
+        ? "No detailed teaching note is uploaded yet. The tutor will build complete lessons from the lecturer's course plan, objectives and expected outcomes."
+        : 'The lecturer has not yet added a course plan or teaching material.';
+    $('courseStructureStatus').textContent = `${sourceMessage} Select a week, section or subsection to begin teaching.`;
+
+    const weeklyMarkup = weeklyPlan.length ? `<section class="weekly-plan-group"><h3>Week-by-week course activities</h3><p class="small-note">Open a week or subunit for a detailed, step-by-step AI lesson.</p><div class="weekly-plan-list">${weeklyPlan.map((week, index) => `<article class="weekly-plan-item"><button class="weekly-plan-button" type="button" data-teach-section="${esc(week.id)}"><span class="week-number">${index + 1}</span><span><strong>${esc(week.title)}</strong><small>${week.generated ? 'Lesson generated from course objectives and expected outcomes' : esc(week.section_path || '')}</small></span><span>Open ›</span></button>${(week.subunits || []).length ? `<div class="weekly-subunits">${week.subunits.map(item => typeof item === 'string' ? `<span>${esc(item)}</span>` : `<button type="button" class="course-section-button compact" data-teach-section="${esc(item.id)}"><span>${esc(item.title)}</span><small>${esc(item.section_path || '')}</small></button>`).join('')}</div>` : ''}</article>`).join('')}</div></section>` : '';
+
     const groups = ['course_outline', 'teaching_notes', 'recommended_reading'];
-    list.innerHTML = groups.map(type => {
+    const documentsMarkup = groups.map(type => {
       const items = documents.filter(doc => doc.document_type === type);
       if (!items.length) return '';
       return `<section class="document-group"><h3>${documentTypeLabel(type)}</h3>${items.map(doc => {
@@ -117,11 +120,13 @@
         return `<details class="course-document" ${type === 'course_outline' ? 'open' : ''}><summary><span><strong>${esc(doc.title || doc.filename)}</strong><small>${esc(doc.filename)}</small></span>${deleteButton}</summary><div class="course-section-tree">${sections || '<p class="small-note">No subsections were detected.</p>'}</div></details>`;
       }).join('')}</section>`;
     }).join('');
+    list.innerHTML = weeklyMarkup + documentsMarkup || '<div class="course-empty">No structured course content is available yet.</div>';
     list.querySelectorAll('[data-teach-section]').forEach(button => button.addEventListener('click', () => teachSection(button.dataset.teachSection, button)));
     list.querySelectorAll('[data-delete-document]').forEach(button => button.addEventListener('click', event => {
       event.preventDefault(); event.stopPropagation(); deleteDocument(button.dataset.classId, button.dataset.deleteDocument, button);
     }));
   }
+
 
   async function teachSection(sectionId, button) {
     if (!sectionId) return;
@@ -141,7 +146,8 @@
       add?.('assistant', data.answer, data.sources || []);
       render?.(data.visual, null);
       if ($('practiceTopic')) $('practiceTopic').value = data.section_title || data.title || '';
-      $('courseStructureStatus').textContent = `Lesson ready: ${data.section_title || 'selected subsection'}`;
+      if (window.aiTutorSetPracticeResponseMode) window.aiTutorSetPracticeResponseMode(data.practice_response_mode || 'student_choice');
+      $('courseStructureStatus').textContent = `Lesson ready: ${data.section_path || data.section_title || 'selected subsection'}${data.generated_from_outcomes ? ' • developed from the course objectives and expected outcomes' : ''}`;
       window.aiTutorSetMobileView?.('visual');
     } catch (error) {
       $('courseStructureStatus').textContent = error.message;
@@ -241,7 +247,14 @@
       $('accountRoleBadge').textContent = state.user.role === 'teacher' ? 'lecturer' : state.user.role;
       $('openDashboard').textContent = portalLabel(state.user.role);
     } else if ($('openDashboard')) $('openDashboard').textContent = 'Portal';
+    const role = state.user?.role || 'guest';
+    document.body.dataset.userRole = role;
+    document.body.classList.toggle('student-interface', role === 'student');
+    document.body.classList.toggle('lecturer-interface', role === 'teacher');
+    document.body.classList.toggle('admin-interface', role === 'admin');
     const lecturer = signedIn && state.user.role === 'teacher';
+    if ($('openDashboard') && role === 'student') $('openDashboard').textContent = 'My courses';
+    if ($('courseSettingsTitle')) $('courseSettingsTitle').textContent = role === 'student' ? 'Current course' : 'Learning settings';
     $('courseMaterialsPanel')?.classList.toggle('hidden', !lecturer);
     $('lessonVideoCreator')?.classList.toggle('hidden', !lecturer);
     if ($('openLessonVideo')) {
@@ -357,7 +370,12 @@
         <label>Topics or weekly sections, one per line<textarea data-field="weekly_topics" rows="6">${esc((item.weekly_topics || []).join('\n'))}</textarea></label>
         <label>Recommended reading list, one per line<textarea data-field="recommended_readings" rows="6">${esc((item.recommended_readings || []).join('\n'))}</textarea></label>
         <label>Lecturer instructions to the AI Tutor<textarea data-field="tutor_instructions" rows="5">${esc(item.tutor_instructions || '')}</textarea></label>
-        <label class="toggle-row"><input data-field="practice_whiteboard_required" type="checkbox" ${item.practice_whiteboard_required ? 'checked' : ''}><span>Require handwritten practice-whiteboard responses</span></label>
+        <label>Required practice-response format<select data-field="practice_response_mode">
+          <option value="student_choice" ${(item.practice_response_mode || 'student_choice') === 'student_choice' ? 'selected' : ''}>Student chooses typing, voice or whiteboard</option>
+          <option value="typed" ${item.practice_response_mode === 'typed' ? 'selected' : ''}>Typed response only</option>
+          <option value="voice" ${item.practice_response_mode === 'voice' ? 'selected' : ''}>Recorded voice response only</option>
+          <option value="whiteboard" ${(item.practice_response_mode === 'whiteboard' || item.practice_whiteboard_required) ? 'selected' : ''}>Handwritten whiteboard response only</option>
+        </select><small>Every generated practice question follows this setting until you change it.</small></label>
         <div class="profile-actions"><button class="primary" type="button" data-save-profile="${esc(item.id)}">Save course profile</button><button class="secondary" type="button" data-select-course="${esc(item.id)}">Open course</button></div>
         <div class="small-status" data-profile-status="${esc(item.id)}"></div>
       </div></details>`;
@@ -597,9 +615,13 @@
 
   function portalDocumentTree(data) {
     const documents = data.documents || [];
-    if (!documents.length) return '<p class="small-note">The lecturer has not uploaded structured teaching documents yet.</p>';
-    return documents.map(doc => `<details class="course-document" open><summary><span><strong>${esc(doc.title || doc.filename)}</strong><small>${documentTypeLabel(doc.document_type)}</small></span></summary><div class="course-section-tree">${(doc.sections || []).map(section => `<button type="button" class="course-section-button" data-portal-teach-section="${esc(section.id)}" style="--section-level:${Math.max(1, Number(section.level) || 1)}"><span>${esc(section.title)}</span><small>${esc(section.section_path || '')}</small></button>`).join('')}</div></details>`).join('');
+    const weeklyPlan = data.weekly_plan || [];
+    const weekly = weeklyPlan.length ? `<section class="student-weekly-plan"><h3>Week-by-week activities</h3>${weeklyPlan.map((item, index) => `<article class="weekly-plan-card"><button type="button" class="student-course-card compact" data-portal-teach-section="${esc(item.id)}"><span><strong>${esc(item.title)}</strong><small>${item.generated ? 'Prepared from course objectives and expected outcomes' : `${(item.subunits || []).length} subunit${(item.subunits || []).length === 1 ? '' : 's'}`}</small></span><span>Learn ›</span></button>${(item.subunits || []).length ? `<div class="weekly-plan-subunits">${item.subunits.map(subunit => typeof subunit === 'string' ? `<span>${esc(subunit)}</span>` : `<button type="button" class="course-section-button" data-portal-teach-section="${esc(subunit.id)}"><span>${esc(subunit.title)}</span><small>${esc(subunit.section_path || '')}</small></button>`).join('')}</div>` : ''}</article>`).join('')}</section>` : '';
+    const docs = documents.map(doc => `<details class="course-document" ${doc.document_type === 'course_outline' ? 'open' : ''}><summary><span><strong>${esc(doc.title || doc.filename)}</strong><small>${documentTypeLabel(doc.document_type)}</small></span></summary><div class="course-section-tree">${(doc.sections || []).map(section => `<button type="button" class="course-section-button" data-portal-teach-section="${esc(section.id)}" style="--section-level:${Math.max(1, Number(section.level) || 1)}"><span>${esc(section.title)}</span><small>${esc(section.section_path || '')}</small></button>`).join('')}</div></details>`).join('');
+    if (!weekly && !docs) return '<p class="small-note">No course plan or teaching material has been uploaded. Ask the lecturer to add course objectives or a course outline.</p>';
+    return weekly + docs;
   }
+
 
   async function openStudentCourse(classId) {
     localStorage.setItem(CLASS_KEY, classId);
@@ -626,7 +648,7 @@
     try {
       const classroom = await api('/api/classes', { method:'POST', body:JSON.stringify({
         name, subject:$('newClassSubject')?.value.trim() || $('course')?.value || '', knowledge_mode:'course_only',
-        learning_outcomes:[], weekly_topics:[], recommended_readings:[], tutor_instructions:'', practice_whiteboard_required:false,
+        learning_outcomes:[], weekly_topics:[], recommended_readings:[], tutor_instructions:'', practice_whiteboard_required:false, practice_response_mode:'student_choice',
       }) });
       await loadClasses();
       localStorage.setItem(CLASS_KEY, classroom.id);
@@ -645,7 +667,8 @@
         name:field('name')?.value || '', subject:field('subject')?.value || '', knowledge_mode:field('knowledge_mode')?.value || 'course_only',
         learning_outcomes:lines(field('learning_outcomes')?.value), weekly_topics:lines(field('weekly_topics')?.value),
         recommended_readings:lines(field('recommended_readings')?.value), tutor_instructions:field('tutor_instructions')?.value || '',
-        practice_whiteboard_required:Boolean(field('practice_whiteboard_required')?.checked),
+        practice_whiteboard_required:(field('practice_response_mode')?.value === 'whiteboard'),
+        practice_response_mode:field('practice_response_mode')?.value || 'student_choice',
       }) });
       if (status) { status.textContent = 'Course profile saved.'; status.className = 'small-status success'; }
       await loadClasses();

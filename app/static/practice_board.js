@@ -3,20 +3,28 @@
 
   const canvas = document.getElementById('practiceDrawingCanvas');
   const wrap = document.getElementById('practiceWhiteboardWrap');
-  if (!canvas || !wrap) return;
+  const shell = document.getElementById('practiceCanvasShell') || canvas?.parentElement;
+  if (!canvas || !wrap || !shell) return;
   const ctx = canvas.getContext('2d');
-  const state = { tool: 'pen', strokes: [], current: null, width: 1, height: 1 };
+  const state = {
+    tool: 'pen', strokes: [], current: null,
+    width: 1, height: 900, minHeight: 900, maxHeight: 5000,
+  };
   const $ = id => document.getElementById(id);
 
-  function resize() {
-    const shell = canvas.parentElement;
+  function configureCanvas(nextWidth = null, nextHeight = null) {
     const rect = shell.getBoundingClientRect();
-    if (!rect.width) return;
-    const cssWidth = rect.width;
-    const cssHeight = Math.max(260, Math.min(430, window.innerHeight * 0.42));
-    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    const cssWidth = Math.max(320, nextWidth || rect.width || state.width || 800);
+    const cssHeight = Math.max(state.minHeight, Math.min(state.maxHeight, nextHeight || state.height));
+    const previousWidth = state.width > 1 ? state.width : cssWidth;
+    if (Math.abs(cssWidth - previousWidth) > 1 && state.strokes.length) {
+      const scaleX = cssWidth / previousWidth;
+      state.strokes.forEach(stroke => stroke.points.forEach(point => { point.x *= scaleX; }));
+      if (state.current) state.current.points.forEach(point => { point.x *= scaleX; });
+    }
     state.width = cssWidth;
     state.height = cssHeight;
+    const ratio = Math.min(window.devicePixelRatio || 1, 2);
     canvas.width = Math.round(cssWidth * ratio);
     canvas.height = Math.round(cssHeight * ratio);
     canvas.style.width = `${cssWidth}px`;
@@ -25,61 +33,79 @@
     redraw();
   }
 
-  function drawStroke(stroke) {
+  function resize() { configureCanvas(); }
+
+  function grow(amount = 650, scroll = true) {
+    const previous = state.height;
+    const next = Math.min(state.maxHeight, state.height + amount);
+    if (next === previous) return false;
+    configureCanvas(state.width, next);
+    if (scroll) requestAnimationFrame(() => shell.scrollTo({ top: shell.scrollHeight, behavior: 'smooth' }));
+    $('practiceAddSpace').disabled = next >= state.maxHeight;
+    return true;
+  }
+
+  function drawStroke(stroke, target = ctx) {
     if (!stroke?.points?.length) return;
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = stroke.tool === 'eraser' ? 24 : 3.5;
+    target.save();
+    target.lineCap = 'round';
+    target.lineJoin = 'round';
+    target.lineWidth = stroke.tool === 'eraser' ? 26 : 3.5;
     if (stroke.tool === 'eraser') {
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.strokeStyle = '#000';
+      target.globalCompositeOperation = 'destination-out';
+      target.strokeStyle = '#000';
     } else {
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.strokeStyle = stroke.colour || '#0b5d4b';
+      target.globalCompositeOperation = 'source-over';
+      target.strokeStyle = stroke.colour || '#0b5d4b';
     }
-    ctx.beginPath();
+    target.beginPath();
     stroke.points.forEach((point, index) => {
-      const x = point.x * state.width;
-      const y = point.y * state.height;
-      if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      if (index === 0) target.moveTo(point.x, point.y); else target.lineTo(point.x, point.y);
     });
     if (stroke.points.length === 1) {
       const point = stroke.points[0];
-      ctx.lineTo(point.x * state.width + 0.1, point.y * state.height + 0.1);
+      target.lineTo(point.x + 0.1, point.y + 0.1);
     }
-    ctx.stroke();
-    ctx.restore();
+    target.stroke();
+    target.restore();
   }
 
   function redraw() {
     ctx.clearRect(0, 0, state.width, state.height);
-    [...state.strokes, ...(state.current ? [state.current] : [])].forEach(drawStroke);
+    [...state.strokes, ...(state.current ? [state.current] : [])].forEach(stroke => drawStroke(stroke));
     $('practiceUndo').disabled = !state.strokes.length;
   }
 
   function point(event) {
     const rect = canvas.getBoundingClientRect();
     return {
-      x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
-      y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+      x: Math.max(0, Math.min(state.width, event.clientX - rect.left)),
+      y: Math.max(0, Math.min(state.height, event.clientY - rect.top)),
     };
+  }
+
+  function ensureWritingSpace(pointValue) {
+    if (pointValue.y > state.height - 110 && state.height < state.maxHeight) grow(650, false);
   }
 
   function pointerDown(event) {
     event.preventDefault();
     canvas.setPointerCapture(event.pointerId);
+    const start = point(event);
+    ensureWritingSpace(start);
     state.current = {
       tool: state.tool,
       colour: $('practicePenColour')?.value || '#0b5d4b',
-      points: [point(event)],
+      points: [start],
     };
     redraw();
   }
   function pointerMove(event) {
     if (!state.current) return;
     event.preventDefault();
-    state.current.points.push(point(event));
+    const next = point(event);
+    ensureWritingSpace(next);
+    state.current.points.push(next);
     redraw();
   }
   function pointerUp(event) {
@@ -101,16 +127,19 @@
   function reset() {
     state.strokes = [];
     state.current = null;
-    redraw();
+    state.height = state.minHeight;
+    configureCanvas(state.width, state.height);
+    shell.scrollTop = 0;
+    $('practiceAddSpace').disabled = false;
   }
 
-  function show(required = false) {
+  function show(required = false, message = '') {
     wrap.classList.remove('hidden');
-    $('practiceWhiteboardBadge').textContent = required ? 'Required' : 'Optional';
+    $('practiceWhiteboardBadge').textContent = required ? 'Required' : 'Available';
     $('practiceWhiteboardBadge').classList.toggle('required-badge', required);
-    $('practiceWhiteboardRequirement').textContent = required
-      ? 'Your lecturer requires handwritten working for this practice question.'
-      : 'Use a mouse, stylus or finger to add handwritten working when it helps.';
+    $('practiceWhiteboardRequirement').textContent = message || (required
+      ? 'Your lecturer requires a handwritten response for this practice question.'
+      : 'Use a mouse, stylus or finger. More writing space is added as you reach the bottom.');
     requestAnimationFrame(resize);
   }
 
@@ -127,28 +156,18 @@
     out.scale(ratio, ratio);
     out.fillStyle = '#ffffff';
     out.fillRect(0, 0, state.width, state.height);
-    state.strokes.forEach(stroke => {
-      out.save();
-      out.lineCap = 'round';
-      out.lineJoin = 'round';
-      out.lineWidth = stroke.tool === 'eraser' ? 24 : 3.5;
-      if (stroke.tool === 'eraser') {
-        out.globalCompositeOperation = 'destination-out';
-        out.strokeStyle = '#000';
-      } else {
-        out.globalCompositeOperation = 'source-over';
-        out.strokeStyle = stroke.colour || '#0b5d4b';
-      }
-      out.beginPath();
-      stroke.points.forEach((p, index) => {
-        const x = p.x * state.width;
-        const y = p.y * state.height;
-        if (index === 0) out.moveTo(x, y); else out.lineTo(x, y);
-      });
-      out.stroke();
-      out.restore();
-    });
+    state.strokes.forEach(stroke => drawStroke(stroke, out));
     return new Promise(resolve => output.toBlob(resolve, 'image/png', 0.92));
+  }
+
+  async function toggleFullscreen() {
+    try {
+      if (document.fullscreenElement === wrap) await document.exitFullscreen();
+      else await wrap.requestFullscreen();
+    } catch {
+      wrap.classList.toggle('practice-board-expanded');
+    }
+    requestAnimationFrame(resize);
   }
 
   canvas.addEventListener('pointerdown', pointerDown);
@@ -159,7 +178,13 @@
   $('practiceEraser')?.addEventListener('click', () => setTool('eraser'));
   $('practiceUndo')?.addEventListener('click', () => { state.strokes.pop(); redraw(); });
   $('practiceClear')?.addEventListener('click', reset);
+  $('practiceAddSpace')?.addEventListener('click', () => grow());
+  $('practiceFullscreen')?.addEventListener('click', toggleFullscreen);
+  document.addEventListener('fullscreenchange', () => {
+    wrap.classList.toggle('is-fullscreen', document.fullscreenElement === wrap);
+    requestAnimationFrame(resize);
+  });
   window.addEventListener('resize', () => { if (!wrap.classList.contains('hidden')) resize(); });
 
-  window.aiTutorPracticeBoard = { show, hide, reset, hasInk, toBlob, resize, setTool };
+  window.aiTutorPracticeBoard = { show, hide, reset, hasInk, toBlob, resize, setTool, grow, toggleFullscreen };
 })();

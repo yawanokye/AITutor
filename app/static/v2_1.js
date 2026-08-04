@@ -5,6 +5,12 @@
   let restoringWorkspace = false;
   let persistTimer = null;
   let diagramDrag = null;
+  let practiceRecorder = null;
+  let practiceStream = null;
+  let practiceAudioChunks = [];
+  let practiceAudioBlob = null;
+  let practiceAudioUrl = '';
+  let practiceRecordingRunId = 0;
 
   Object.assign(state, {
     practice: null,
@@ -23,7 +29,7 @@
     try {
       const visual = state.visualPlan?.kind === 'image_annotation' ? null : state.visualPlan;
       const payload = {
-        version: '5.0.3',
+        version: '5.1.0',
         sessionId: state.sessionId,
         chatLog: state.chatLog.slice(-80),
         lastAnswer: state.lastAnswer,
@@ -423,15 +429,139 @@
     box.innerHTML = html;
   }
 
+  function practiceMimeType() {
+    const options = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/ogg'];
+    return options.find(type => window.MediaRecorder?.isTypeSupported?.(type)) || '';
+  }
+
+  function practiceAudioFilename(blob) {
+    const type = String(blob?.type || '').toLowerCase();
+    if (type.includes('mp4') || type.includes('m4a')) return 'practice-response.m4a';
+    if (type.includes('ogg')) return 'practice-response.ogg';
+    if (type.includes('mpeg') || type.includes('mp3')) return 'practice-response.mp3';
+    if (type.includes('wav')) return 'practice-response.wav';
+    return 'practice-response.webm';
+  }
+
+  function clearPracticeRecording(stopTracks = true) {
+    practiceRecordingRunId += 1;
+    if (practiceRecorder?.state === 'recording') practiceRecorder.stop();
+    practiceRecorder = null;
+    if (stopTracks) practiceStream?.getTracks?.().forEach(track => track.stop());
+    practiceStream = null;
+    practiceAudioChunks = [];
+    practiceAudioBlob = null;
+    if (practiceAudioUrl) URL.revokeObjectURL(practiceAudioUrl);
+    practiceAudioUrl = '';
+    const preview = el('practiceAudioPreview');
+    if (preview) { preview.pause(); preview.removeAttribute('src'); preview.load(); preview.classList.add('hidden'); }
+    el('practiceClearRecording')?.classList.add('hidden');
+    if (el('practiceRecordingStatus')) el('practiceRecordingStatus').textContent = 'No response recorded.';
+    if (el('practiceRecordLabel')) el('practiceRecordLabel').textContent = 'Record response';
+    if (el('practiceRecordIcon')) el('practiceRecordIcon').textContent = '🎙';
+    el('practiceRecordResponse')?.classList.remove('recording');
+  }
+
+  async function togglePracticeRecording() {
+    if (!state.practice || state.practice.selectedMode !== 'voice') return;
+    if (practiceRecorder?.state === 'recording') {
+      practiceRecorder.stop();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      practiceFeedback('Voice recording is not supported in this browser. Use a current Chrome, Edge, Firefox or Safari browser.', 'error');
+      return;
+    }
+    clearPracticeRecording();
+    try {
+      practiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = practiceMimeType();
+      practiceRecorder = mimeType ? new MediaRecorder(practiceStream, { mimeType }) : new MediaRecorder(practiceStream);
+      const recorder = practiceRecorder;
+      const runId = ++practiceRecordingRunId;
+      practiceAudioChunks = [];
+      recorder.addEventListener('dataavailable', event => { if (runId === practiceRecordingRunId && event.data?.size) practiceAudioChunks.push(event.data); });
+      recorder.addEventListener('stop', () => {
+        if (runId !== practiceRecordingRunId) return;
+        const actualType = recorder.mimeType || mimeType || 'audio/webm';
+        practiceAudioBlob = new Blob(practiceAudioChunks, { type: actualType });
+        practiceAudioUrl = URL.createObjectURL(practiceAudioBlob);
+        const preview = el('practiceAudioPreview');
+        preview.src = practiceAudioUrl;
+        preview.classList.remove('hidden');
+        el('practiceClearRecording').classList.remove('hidden');
+        el('practiceRecordingStatus').textContent = 'Recording ready. Play it back before submitting.';
+        el('practiceRecordLabel').textContent = 'Record again';
+        el('practiceRecordIcon').textContent = '🎙';
+        el('practiceRecordResponse').classList.remove('recording');
+        practiceStream?.getTracks?.().forEach(track => track.stop());
+        practiceStream = null;
+      }, { once: true });
+      practiceRecorder.start();
+      el('practiceRecordingStatus').textContent = 'Recording… Select Stop recording when finished.';
+      el('practiceRecordLabel').textContent = 'Stop recording';
+      el('practiceRecordIcon').textContent = '■';
+      el('practiceRecordResponse').classList.add('recording');
+    } catch (error) {
+      clearPracticeRecording();
+      practiceFeedback(error?.name === 'NotAllowedError' ? 'Microphone permission was not granted.' : 'The microphone could not be started.', 'error');
+    }
+  }
+
+  function setPracticeResponseMode(mode, fromQuestion = false) {
+    if (!state.practice) return;
+    const allowed = state.practice.allowedModes || ['typed', 'voice', 'whiteboard'];
+    const selected = allowed.includes(mode) ? mode : allowed[0] || 'typed';
+    state.practice.selectedMode = selected;
+    document.querySelectorAll('[data-practice-response]').forEach(button => {
+      const permitted = allowed.includes(button.dataset.practiceResponse);
+      button.hidden = !permitted;
+      button.disabled = !permitted;
+      button.classList.toggle('active', button.dataset.practiceResponse === selected);
+      button.setAttribute('aria-pressed', String(button.dataset.practiceResponse === selected));
+    });
+    el('practiceTypedResponse').classList.toggle('hidden', selected !== 'typed');
+    el('practiceVoiceResponse').classList.toggle('hidden', selected !== 'voice');
+    if (selected === 'whiteboard') {
+      state.practice.useBoard = true;
+      window.aiTutorPracticeBoard?.show(state.practice.requiredMode === 'whiteboard', state.practice.requiredMode === 'whiteboard'
+        ? 'Your lecturer requires a handwritten response for this practice question.'
+        : 'Write your response with a mouse, stylus or finger. The board grows downward as you write.');
+      requestAnimationFrame(() => window.aiTutorPracticeBoard?.resize?.());
+    } else {
+      window.aiTutorPracticeBoard?.hide();
+    }
+    const required = state.practice.requiredMode !== 'student_choice';
+    el('practiceResponseRequirementBadge').textContent = required
+      ? `${selected.charAt(0).toUpperCase()}${selected.slice(1)} required`
+      : 'Student choice';
+    el('practiceResponseInstruction').textContent = required
+      ? `Your lecturer has set ${selected} as the required response method.`
+      : 'Choose typing, voice recording or handwriting.';
+    el('practiceBoard').classList.toggle('hidden', !allowed.includes('whiteboard'));
+    if (!fromQuestion && selected === 'typed') el('practiceAnswer').focus();
+    if (!fromQuestion && selected === 'whiteboard') el('practiceWhiteboardWrap')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  window.aiTutorSetPracticeResponseMode = mode => setPracticeResponseMode(mode);
+
   function renderPracticeQuestion(data) {
+    clearPracticeRecording();
+    const requiredMode = data.response_mode || window.aiTutorGetSelectedClass?.()?.practice_response_mode || 'student_choice';
+    const allowedModes = Array.isArray(data.allowed_response_modes) && data.allowed_response_modes.length
+      ? data.allowed_response_modes
+      : (requiredMode === 'student_choice' ? ['typed', 'voice', 'whiteboard'] : [requiredMode]);
+    const firstMode = requiredMode === 'student_choice' ? (allowedModes.includes('typed') ? 'typed' : allowedModes[0]) : requiredMode;
     state.practice = {
       ...(state.practice || {}),
       id: data.practice_id,
       current: data,
       hint: data.hint || '',
       pendingNext: null,
-      useBoard: Boolean(window.aiTutorGetSelectedClass?.()?.practice_whiteboard_required),
-      boardRequired: Boolean(window.aiTutorGetSelectedClass?.()?.practice_whiteboard_required)
+      requiredMode,
+      allowedModes,
+      selectedMode: firstMode,
+      useBoard: firstMode === 'whiteboard',
+      boardRequired: requiredMode === 'whiteboard'
     };
     el('practicePanel').classList.remove('hidden');
     el('practiceTitle').textContent = data.title || 'Guided practice';
@@ -447,14 +577,10 @@
     el('revealPractice').disabled = false;
     el('practiceFeedback').className = 'practice-feedback hidden';
     window.aiTutorPracticeBoard?.reset();
-    if (state.practice.boardRequired) window.aiTutorPracticeBoard?.show(true); else window.aiTutorPracticeBoard?.hide();
-    if (data.visual && data.visual.kind !== 'none') {
-      renderVisual(data.visual, null);
-    } else {
-      clearInk(false);
-    }
+    setPracticeResponseMode(firstMode, true);
+    if (data.visual && data.visual.kind !== 'none') renderVisual(data.visual, null); else clearInk(false);
     setMobileView('chat');
-    el('practiceAnswer').focus();
+    if (firstMode === 'typed') el('practiceAnswer').focus();
   }
 
   async function startPractice() {
@@ -489,6 +615,7 @@
   }
 
   function closePractice() {
+    clearPracticeRecording();
     state.practice = null;
     el('practicePanel').classList.add('hidden');
     window.aiTutorPracticeBoard?.hide();
@@ -496,11 +623,7 @@
   }
 
   async function practiceBoardBlob() {
-    const practiceBlob = await window.aiTutorPracticeBoard?.toBlob?.();
-    if (practiceBlob) return practiceBlob;
-    if (!state.practice?.useBoard && state.strokes.length === 0) return null;
-    const canvas = await captureBoardCanvas();
-    return new Promise(resolve => canvas.toBlob(resolve, 'image/png', 0.92));
+    return window.aiTutorPracticeBoard?.toBlob?.() || null;
   }
 
   async function checkPracticeAnswer() {
@@ -509,25 +632,34 @@
       renderPracticeQuestion(state.practice.pendingNext);
       return;
     }
+    const mode = state.practice.selectedMode || 'typed';
     const answer = el('practiceAnswer').value.trim();
     const practiceInk = Boolean(window.aiTutorPracticeBoard?.hasInk?.());
-    if (state.practice.boardRequired && !practiceInk) {
-      practiceFeedback('Your lecturer requires handwritten working on the practice whiteboard.', 'warning');
-      window.aiTutorPracticeBoard?.show(true);
+    if (mode === 'typed' && !answer) {
+      practiceFeedback('Type your response before submitting.', 'warning');
+      el('practiceAnswer').focus();
       return;
     }
-    if (!answer && !practiceInk && !state.practice.useBoard && state.strokes.length === 0) {
-      practiceFeedback('Type an answer or use the practice whiteboard first.', 'warning');
+    if (mode === 'voice' && !practiceAudioBlob) {
+      practiceFeedback('Record your response before submitting.', 'warning');
+      return;
+    }
+    if (mode === 'whiteboard' && !practiceInk) {
+      practiceFeedback('Write your response on the practice whiteboard before submitting.', 'warning');
+      window.aiTutorPracticeBoard?.show(true);
       return;
     }
     const form = new FormData();
     form.append('practice_id', state.practice.id);
-    form.append('answer', answer);
+    form.append('answer', mode === 'typed' ? answer : '');
     el('checkPractice').disabled = true;
-    setStatus('Checking your answer…', true);
+    setStatus(mode === 'voice' ? 'Transcribing and checking your response…' : 'Checking your answer…', true);
     try {
-      const blob = await practiceBoardBlob();
-      if (blob) form.append('board_image', blob, 'practice-whiteboard.png');
+      if (mode === 'voice' && practiceAudioBlob) form.append('audio_response', practiceAudioBlob, practiceAudioFilename(practiceAudioBlob));
+      if (mode === 'whiteboard') {
+        const blob = await practiceBoardBlob();
+        if (blob) form.append('board_image', blob, 'practice-whiteboard.png');
+      }
       const data = await apiJson('/api/practice/check', { method: 'POST', body: form });
       const tone = data.correct ? 'success' : 'warning';
       const hint = data.hint ? `<p><strong>Hint:</strong> ${escapeHtml(data.hint)}</p>` : '';
@@ -546,6 +678,7 @@
         el('checkPractice').disabled = false;
         clearInk(false);
         window.aiTutorPracticeBoard?.reset();
+        clearPracticeRecording();
         setStatus('Correct. Continue when ready.');
       } else {
         el('checkPractice').disabled = false;
@@ -568,11 +701,9 @@
   }
 
   function usePracticeWhiteboard() {
-    if (!state.practice) return;
-    state.practice.useBoard = true;
-    window.aiTutorPracticeBoard?.show(Boolean(state.practice.boardRequired));
+    if (!state.practice || !(state.practice.allowedModes || []).includes('whiteboard')) return;
+    setPracticeResponseMode('whiteboard');
     window.aiTutorPracticeBoard?.setTool?.('pen');
-    el('practiceWhiteboardWrap')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setStatus('Write your response on the separate practice whiteboard, then select Check answer.');
   }
 
@@ -669,6 +800,9 @@
   el('practiceHint').addEventListener('click', showPracticeHint);
   el('practiceBoard').addEventListener('click', usePracticeWhiteboard);
   el('revealPractice').addEventListener('click', revealPracticeSolution);
+  document.querySelectorAll('[data-practice-response]').forEach(button => button.addEventListener('click', () => setPracticeResponseMode(button.dataset.practiceResponse)));
+  el('practiceRecordResponse')?.addEventListener('click', togglePracticeRecording);
+  el('practiceClearRecording')?.addEventListener('click', () => clearPracticeRecording());
   el('practiceAnswer').addEventListener('keydown', event => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
