@@ -1,8 +1,18 @@
-# Anovlad Institutional AI Tutor v5.0.3
+# Anovlad Institutional AI Tutor v5.1
 
-A Render-ready, role-based AI learning platform for institutions. Version 5.0 separates administration, teaching and learning into dedicated portals and turns uploaded course documents into a structured, selectable AI tutoring environment.
+A Render-ready, role-based AI learning platform for institutions. Administration, teaching and learning use dedicated portals, while lecturer-approved course documents become a structured, selectable AI tutoring environment.
 
-Version 5.0.3 adds explicit repository ownership, automatic migration of legacy uploads, verified deletion of current and historical index records, cache-safe deployment, and an all-enrolled-courses view for students.
+Version 5.1 provides a simpler course-first student interface, lecturer-controlled typed, voice or handwritten practice responses, vertically expandable full-screen whiteboards, week-by-week course-outline activities, outcome-generated teaching notes when readings are absent, and detailed visual teaching that matches the written notes. It retains the document ownership and deletion safeguards introduced in v5.0.3.
+
+## v5.1 student learning workspace
+
+- Students work from **My courses**, open an enrolled course, and select a week, section or subsection. Provider, administrator and lecturer-only controls are hidden.
+- Lecturers set each course to student choice, typed response, recorded voice response or handwritten whiteboard response for practice activities.
+- The practice whiteboard grows downward, scrolls vertically and opens full screen. The teaching whiteboard also opens full screen.
+- Word course outlines can be organised with Heading styles or Week, Topic and Activities tables. Weeks and subunits become selectable lessons.
+- When readings or detailed notes are missing, the tutor develops a complete instructional expansion from objectives, expected outcomes, weekly topics and lecturer instructions.
+- Broad topics are divided into prerequisite and supporting subtopics when needed for complete understanding.
+- Every slide displays its detailed explanation, worked example, self-check and teaching note, so the whiteboard is not less informative than the written lesson.
 
 ## What is new in v5.0
 
@@ -193,7 +203,7 @@ This release uses the existing Render PostgreSQL database. It does not create a 
 6. Add or confirm the environment variables below.
 7. Select **Manual Deploy**, then **Clear build cache and deploy**.
 8. Wait until the service is Live.
-9. Open `/health` and confirm version `5.0.3`.
+9. Open `/health` and confirm version `5.1.0`.
 10. Refresh the browser with `Ctrl + Shift + R`.
 
 Expected health fields include:
@@ -201,7 +211,7 @@ Expected health fields include:
 ```json
 {
   "status": "ok",
-  "version": "5.0.3",
+  "version": "5.1.0",
   "administrator_portal_enabled": true,
   "lecturer_managed_enrolment": true,
   "structured_course_content_enabled": true,
@@ -359,6 +369,18 @@ Copy-Item .env.example .env
 uvicorn app.main:app --reload
 ```
 
+
+## v5.1 rollout checks
+
+1. Sign in as a lecturer and open a course profile. Set **Required practice-response format** to Student choice, Typed, Recorded voice or Whiteboard.
+2. Upload a Word course outline that uses Heading styles or a table with Week, Topic and Activities columns.
+3. Sign in as a student, open **My courses**, select the course and confirm that the weekly activities and subunits appear.
+4. Start practice and verify that only the lecturer-approved response method is available.
+5. Test the practice board's **Writing space** and **Full screen** buttons.
+6. Open a detailed course lesson and confirm that expanded teaching notes are visible on each whiteboard slide.
+
+No manual database migration or new environment variable is required. The `practice_response_mode` column is created automatically at startup.
+
 ## Validation
 
 ```bash
@@ -370,7 +392,7 @@ node --check app/static/practice_board.js
 pytest -q
 ```
 
-The supplied release passes 32 automated tests. External DeepSeek, OpenAI and optional Tavus calls require the institution's own API credentials and should be verified after deployment.
+The supplied release passes 37 automated tests. External DeepSeek, OpenAI and optional Tavus calls require the institution's own API credentials and should be verified after deployment.
 
 ## Security and scale
 
@@ -385,7 +407,7 @@ The supplied release passes 32 automated tests. External DeepSeek, OpenAI and op
 - Review institutional privacy, retention and AI-governance requirements before production use.
 
 
-## v5.0.3 document ownership and deletion
+## v5.1.0 document ownership and deletion
 
 - Administrator repository uploads remain private to administrators and are not mixed into lecturer courses.
 - Lecturers can upload and delete documents only inside courses they manage.

@@ -76,7 +76,7 @@ Choose one method only.
 - [ ] Select **Clear build cache and deploy**.
 - [ ] Wait for the status to become **Live**.
 - [ ] Open `/health`.
-- [ ] Confirm `version` is `5.0.3`.
+- [ ] Confirm `version` is `5.1.0`.
 - [ ] Confirm the five new capability flags are `true`.
 - [ ] Refresh the browser with `Ctrl + Shift + R`.
 
@@ -147,7 +147,7 @@ Choose one method only.
 - [ ] Deleting a lecturer document removes it from both course contents and indexed materials.
 - [ ] A student enrolled in two or more courses sees every enrolled course.
 
-## Effective v5.0.3 document verification
+## Effective v5.1.0 document verification
 
 - [ ] Open the Administrator Portal and confirm each private document has a Delete button.
 - [ ] Delete one older administrator upload and confirm the success message reports indexed extracts removed.
@@ -155,4 +155,19 @@ Choose one method only.
 - [ ] Upload a document to Lecturer A's course and confirm Lecturer B cannot see it.
 - [ ] Delete a lecturer course document and confirm it disappears from both the course tree and course-material list.
 - [ ] Ask a question containing a unique phrase from the deleted document and confirm the source is no longer retrieved.
-- [ ] Confirm `/health` reports version `5.0.3`.
+- [ ] Confirm `/health` reports version `5.1.0`.
+
+## v5.1 functional verification
+
+- [ ] Student sign-in shows a course-first interface without provider, administrator or lecturer controls.
+- [ ] **My courses** lists every course in which the student is enrolled.
+- [ ] Course outline weeks, activities and subunits are visible and selectable.
+- [ ] Lecturer can choose Student choice, Typed, Recorded voice or Whiteboard for practice responses.
+- [ ] Typed practice response submits successfully.
+- [ ] Voice practice response records, previews, transcribes and submits successfully.
+- [ ] Practice whiteboard accepts handwriting and submits the image for marking.
+- [ ] **Writing space** increases the board height and the board scrolls vertically.
+- [ ] Both teaching and practice whiteboards open full screen.
+- [ ] A course with objectives and outcomes but no reading upload still produces a detailed lesson.
+- [ ] Detailed whiteboard slides show explanations and teaching notes at the same depth as the written lesson.
+
