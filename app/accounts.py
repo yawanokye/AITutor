@@ -170,6 +170,7 @@ class AccountStore:
                     recommended_readings JSONB NOT NULL DEFAULT '[]'::jsonb,
                     tutor_instructions TEXT NOT NULL DEFAULT '',
                     practice_whiteboard_required BOOLEAN NOT NULL DEFAULT FALSE,
+                    practice_response_mode TEXT NOT NULL DEFAULT 'student_choice',
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
                 """,
@@ -256,6 +257,7 @@ class AccountStore:
                 "ALTER TABLE ai_tutor_classes ADD COLUMN IF NOT EXISTS recommended_readings JSONB NOT NULL DEFAULT '[]'::jsonb",
                 "ALTER TABLE ai_tutor_classes ADD COLUMN IF NOT EXISTS tutor_instructions TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE ai_tutor_classes ADD COLUMN IF NOT EXISTS practice_whiteboard_required BOOLEAN NOT NULL DEFAULT FALSE",
+                "ALTER TABLE ai_tutor_classes ADD COLUMN IF NOT EXISTS practice_response_mode TEXT NOT NULL DEFAULT 'student_choice'",
                 "CREATE INDEX IF NOT EXISTS idx_ai_tutor_events_user_created ON ai_tutor_learning_events(user_id, created_at DESC)",
                 "CREATE INDEX IF NOT EXISTS idx_ai_tutor_members_student ON ai_tutor_class_members(student_id)",
                 "CREATE INDEX IF NOT EXISTS idx_ai_tutor_usage_user_created ON ai_tutor_usage_events(user_id, created_at DESC)",
@@ -278,7 +280,7 @@ class AccountStore:
             join_code TEXT UNIQUE NOT NULL, knowledge_mode TEXT NOT NULL DEFAULT 'course_only',
             learning_outcomes TEXT NOT NULL DEFAULT '[]', weekly_topics TEXT NOT NULL DEFAULT '[]',
             recommended_readings TEXT NOT NULL DEFAULT '[]', tutor_instructions TEXT NOT NULL DEFAULT '',
-            practice_whiteboard_required INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+            practice_whiteboard_required INTEGER NOT NULL DEFAULT 0, practice_response_mode TEXT NOT NULL DEFAULT 'student_choice', created_at TEXT NOT NULL,
             FOREIGN KEY(teacher_id) REFERENCES ai_tutor_users(id) ON DELETE CASCADE
         );
         CREATE TABLE IF NOT EXISTS ai_tutor_class_members (
@@ -334,6 +336,7 @@ class AccountStore:
                 "recommended_readings": "TEXT NOT NULL DEFAULT '[]'",
                 "tutor_instructions": "TEXT NOT NULL DEFAULT ''",
                 "practice_whiteboard_required": "INTEGER NOT NULL DEFAULT 0",
+                "practice_response_mode": "TEXT NOT NULL DEFAULT 'student_choice'",
             }
             for column, definition in migrations.items():
                 if column not in existing:
@@ -501,7 +504,8 @@ class AccountStore:
         raise RuntimeError("A new enrolment code could not be generated.")
 
     def merge_course_outline(
-        self, *, class_id: str, teacher_id: str, objectives: list[str], recommended_readings: list[str]
+        self, *, class_id: str, teacher_id: str, objectives: list[str], recommended_readings: list[str],
+        weekly_topics: list[str] | None = None
     ) -> dict[str, Any]:
         classroom = self.class_for_user(class_id=class_id, user_id=teacher_id, role="teacher")
         if not classroom:
@@ -514,6 +518,10 @@ class AccountStore:
             *[str(item).strip() for item in classroom.get("recommended_readings", []) if str(item).strip()],
             *[str(item).strip() for item in recommended_readings if str(item).strip()],
         ]))[:60]
+        merged_weeks = list(dict.fromkeys([
+            *[str(item).strip() for item in classroom.get("weekly_topics", []) if str(item).strip()],
+            *[str(item).strip() for item in (weekly_topics or []) if str(item).strip()],
+        ]))[:40]
         return self.update_class_profile(
             class_id=class_id,
             teacher_id=teacher_id,
@@ -521,10 +529,11 @@ class AccountStore:
             subject=str(classroom.get("subject", "")),
             knowledge_mode=str(classroom.get("knowledge_mode", "course_only")),
             learning_outcomes=merged_objectives,
-            weekly_topics=list(classroom.get("weekly_topics", [])),
+            weekly_topics=merged_weeks,
             recommended_readings=merged_readings,
             tutor_instructions=str(classroom.get("tutor_instructions", "")),
             practice_whiteboard_required=bool(classroom.get("practice_whiteboard_required", False)),
+            practice_response_mode=str(classroom.get("practice_response_mode", "student_choice")),
         )
 
     def _new_join_code(self) -> str:
@@ -535,7 +544,7 @@ class AccountStore:
         self, *, teacher_id: str, name: str, subject: str, knowledge_mode: str = "course_only",
         learning_outcomes: list[str] | None = None, weekly_topics: list[str] | None = None,
         recommended_readings: list[str] | None = None, tutor_instructions: str = "",
-        practice_whiteboard_required: bool = False
+        practice_whiteboard_required: bool = False, practice_response_mode: str = "student_choice"
     ) -> dict[str, Any]:
         class_id = str(uuid.uuid4())
         now = _utcnow()
@@ -544,6 +553,10 @@ class AccountStore:
         weeks = [str(item).strip()[:300] for item in (weekly_topics or []) if str(item).strip()][:40]
         readings = [str(item).strip()[:500] for item in (recommended_readings or []) if str(item).strip()][:60]
         tutor_instructions = tutor_instructions.strip()[:5000]
+        practice_response_mode = practice_response_mode if practice_response_mode in {"student_choice", "typed", "voice", "whiteboard"} else "student_choice"
+        if practice_whiteboard_required:
+            practice_response_mode = "whiteboard"
+        practice_whiteboard_required = practice_response_mode == "whiteboard"
         for _ in range(6):
             join_code = self._new_join_code()
             try:
@@ -551,18 +564,18 @@ class AccountStore:
                     with self._pg() as conn, conn.cursor() as cur:
                         cur.execute(
                             """INSERT INTO ai_tutor_classes(
-                                id,teacher_id,name,subject,join_code,knowledge_mode,learning_outcomes,weekly_topics,recommended_readings,tutor_instructions,practice_whiteboard_required,created_at
-                            ) VALUES(%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s)""",
-                            (class_id, teacher_id, name.strip()[:140], subject.strip()[:160], join_code, knowledge_mode, _json(outcomes), _json(weeks), _json(readings), tutor_instructions, practice_whiteboard_required, now),
+                                id,teacher_id,name,subject,join_code,knowledge_mode,learning_outcomes,weekly_topics,recommended_readings,tutor_instructions,practice_whiteboard_required,practice_response_mode,created_at
+                            ) VALUES(%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s,%s)""",
+                            (class_id, teacher_id, name.strip()[:140], subject.strip()[:160], join_code, knowledge_mode, _json(outcomes), _json(weeks), _json(readings), tutor_instructions, practice_whiteboard_required, practice_response_mode, now),
                         )
                         conn.commit()
                 else:
                     with self._lock, self._sqlite() as conn:
                         conn.execute(
                             """INSERT INTO ai_tutor_classes(
-                                id,teacher_id,name,subject,join_code,knowledge_mode,learning_outcomes,weekly_topics,recommended_readings,tutor_instructions,practice_whiteboard_required,created_at
-                            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-                            (class_id, teacher_id, name.strip()[:140], subject.strip()[:160], join_code, knowledge_mode, _json(outcomes), _json(weeks), _json(readings), tutor_instructions, int(practice_whiteboard_required), now.isoformat()),
+                                id,teacher_id,name,subject,join_code,knowledge_mode,learning_outcomes,weekly_topics,recommended_readings,tutor_instructions,practice_whiteboard_required,practice_response_mode,created_at
+                            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (class_id, teacher_id, name.strip()[:140], subject.strip()[:160], join_code, knowledge_mode, _json(outcomes), _json(weeks), _json(readings), tutor_instructions, int(practice_whiteboard_required), practice_response_mode, now.isoformat()),
                         )
                         conn.commit()
                 return self.get_class(class_id) or {}
@@ -601,6 +614,7 @@ class AccountStore:
             "recommended_readings": _safe_json(row.get("recommended_readings"), []),
             "tutor_instructions": str(row.get("tutor_instructions", "") or ""),
             "practice_whiteboard_required": bool(row.get("practice_whiteboard_required", False)),
+            "practice_response_mode": str(row.get("practice_response_mode", "student_choice") or "student_choice"),
             "created_at": _iso(row.get("created_at")),
         }
 
@@ -629,17 +643,21 @@ class AccountStore:
     def update_class_profile(
         self, *, class_id: str, teacher_id: str, name: str, subject: str, knowledge_mode: str,
         learning_outcomes: list[str], weekly_topics: list[str], recommended_readings: list[str],
-        tutor_instructions: str, practice_whiteboard_required: bool
+        tutor_instructions: str, practice_whiteboard_required: bool, practice_response_mode: str = "student_choice"
     ) -> dict[str, Any]:
         knowledge_mode = knowledge_mode if knowledge_mode in {"course_only", "course_plus_approved", "general"} else "course_only"
         outcomes = [str(item).strip()[:300] for item in learning_outcomes if str(item).strip()][:30]
         weeks = [str(item).strip()[:300] for item in weekly_topics if str(item).strip()][:40]
         readings = [str(item).strip()[:500] for item in recommended_readings if str(item).strip()][:60]
-        values = (name.strip()[:140], subject.strip()[:160], knowledge_mode, _json(outcomes), _json(weeks), _json(readings), tutor_instructions.strip()[:5000], practice_whiteboard_required)
+        practice_response_mode = practice_response_mode if practice_response_mode in {"student_choice", "typed", "voice", "whiteboard"} else "student_choice"
+        if practice_whiteboard_required:
+            practice_response_mode = "whiteboard"
+        practice_whiteboard_required = practice_response_mode == "whiteboard"
+        values = (name.strip()[:140], subject.strip()[:160], knowledge_mode, _json(outcomes), _json(weeks), _json(readings), tutor_instructions.strip()[:5000], practice_whiteboard_required, practice_response_mode)
         if self._use_postgres:
             with self._pg() as conn, conn.cursor() as cur:
                 cur.execute(
-                    """UPDATE ai_tutor_classes SET name=%s,subject=%s,knowledge_mode=%s,learning_outcomes=%s::jsonb,weekly_topics=%s::jsonb,recommended_readings=%s::jsonb,tutor_instructions=%s,practice_whiteboard_required=%s
+                    """UPDATE ai_tutor_classes SET name=%s,subject=%s,knowledge_mode=%s,learning_outcomes=%s::jsonb,weekly_topics=%s::jsonb,recommended_readings=%s::jsonb,tutor_instructions=%s,practice_whiteboard_required=%s,practice_response_mode=%s
                        WHERE id=%s AND teacher_id=%s""",
                     (*values, class_id, teacher_id),
                 )
@@ -649,7 +667,7 @@ class AccountStore:
         else:
             with self._lock, self._sqlite() as conn:
                 cur = conn.execute(
-                    """UPDATE ai_tutor_classes SET name=?,subject=?,knowledge_mode=?,learning_outcomes=?,weekly_topics=?,recommended_readings=?,tutor_instructions=?,practice_whiteboard_required=?
+                    """UPDATE ai_tutor_classes SET name=?,subject=?,knowledge_mode=?,learning_outcomes=?,weekly_topics=?,recommended_readings=?,tutor_instructions=?,practice_whiteboard_required=?,practice_response_mode=?
                        WHERE id=? AND teacher_id=?""",
                     (*values, class_id, teacher_id),
                 )

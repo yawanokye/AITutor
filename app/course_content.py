@@ -31,6 +31,76 @@ NUMBERED_HEADING_RE = re.compile(r"^(\d+(?:\.\d+){0,4})[.)]?\s+(.{2,140})$")
 MARKDOWN_HEADING_RE = re.compile(r"^(#{1,5})\s+(.+)$")
 BULLET_RE = re.compile(r"^\s*(?:[-•*]|\d+[.)]|[A-Za-z][.)])\s+")
 
+WEEK_TITLE_RE = re.compile(r"^(?:week|wk)\s*([0-9]{1,2}|[IVXLC]+)\b(?:\s*[-:.)]\s*|\s+)?(.*)$", re.IGNORECASE)
+TABLE_WEEK_HEADERS = {"week", "wk", "teaching week", "session"}
+TABLE_TOPIC_HEADERS = {"topic", "topics", "content", "unit", "theme", "lesson", "subject matter"}
+TABLE_SUBUNIT_HEADERS = {"subunit", "sub-unit", "subtopic", "sub-topic", "activities", "learning activities", "weekly activities", "outline"}
+
+
+def _cell_items(value: str) -> list[str]:
+    raw = (value or "").replace("\r", "\n")
+    parts: list[str] = []
+    for line in raw.split("\n"):
+        for item in re.split(r"\s*[;•]\s*", line):
+            clean = BULLET_RE.sub("", _clean_line(item)).strip(" -•*\t")
+            if clean and clean not in parts:
+                parts.append(clean[:300])
+    return parts
+
+
+def _table_week_sections(document: Document) -> list[tuple[int, str, list[str]]]:
+    sections: list[tuple[int, str, list[str]]] = []
+    for table_number, table in enumerate(document.tables, start=1):
+        rows = [[_clean_line(cell.text) for cell in row.cells] for row in table.rows]
+        rows = [row for row in rows if any(row)]
+        if not rows:
+            continue
+        headers = [cell.lower().strip() for cell in rows[0]]
+        def column(names: set[str]) -> int | None:
+            for idx, header in enumerate(headers):
+                if header in names or any(name in header for name in names):
+                    return idx
+            return None
+        week_idx = column(TABLE_WEEK_HEADERS)
+        topic_idx = column(TABLE_TOPIC_HEADERS)
+        subunit_idx = column(TABLE_SUBUNIT_HEADERS)
+        data_rows = rows[1:] if week_idx is not None or topic_idx is not None else rows
+        if week_idx is not None:
+            current_week = ""
+            for row in data_rows:
+                week_cell = row[week_idx] if week_idx < len(row) else ""
+                if week_cell:
+                    current_week = week_cell
+                if not current_week:
+                    continue
+                topic = row[topic_idx] if topic_idx is not None and topic_idx < len(row) else ""
+                week_match = WEEK_TITLE_RE.match(current_week)
+                week_label = f"Week {week_match.group(1)}" if week_match else f"Week {current_week}"
+                trailing = (week_match.group(2).strip() if week_match else "")
+                title_topic = topic or trailing
+                title = f"{week_label}: {title_topic}" if title_topic else week_label
+                content_lines = []
+                for idx, value in enumerate(row):
+                    if not value or idx == week_idx:
+                        continue
+                    label = rows[0][idx] if idx < len(rows[0]) and rows[0][idx] else f"Column {idx + 1}"
+                    content_lines.append(f"{label}: {value}")
+                sections.append((1, title[:160], content_lines or [title_topic]))
+                subunit_value = row[subunit_idx] if subunit_idx is not None and subunit_idx < len(row) else ""
+                if not subunit_value and topic_idx is not None and topic_idx < len(row):
+                    subunit_value = row[topic_idx]
+                for subunit in _cell_items(subunit_value):
+                    if subunit.lower() == title_topic.lower():
+                        continue
+                    sections.append((2, subunit[:160], [f"Part of {title}.", subunit]))
+            continue
+        # Preserve non-week tables as a readable section so a learner can open them.
+        table_lines = []
+        for row in rows:
+            table_lines.append(" | ".join(value for value in row if value))
+        sections.append((2, f"Table {table_number}", table_lines))
+    return sections
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -92,10 +162,10 @@ def _extract_docx_blocks(data: bytes) -> tuple[str, list[tuple[int, str, list[st
     current_title = "Complete document"
     current_lines: list[str] = []
 
-    def flush() -> None:
+    def flush(include_empty: bool = False) -> None:
         nonlocal current_lines
         content = "\n".join(line for line in current_lines if line.strip()).strip()
-        if content:
+        if content or (include_empty and current_title != "Complete document"):
             sections.append((current_level, current_title, current_lines[:]))
         current_lines = []
 
@@ -108,18 +178,21 @@ def _extract_docx_blocks(data: bytes) -> tuple[str, list[tuple[int, str, list[st
             title = text
             continue
         heading_match = re.search(r"heading\s*([1-5])", style_name)
-        if heading_match:
-            flush()
-            current_level = int(heading_match.group(1))
-            current_title = text
+        detected = _looks_like_heading(text)
+        list_context = any(term in current_title.lower() for term in ("objective", "outcome", "recommended reading", "bibliograph", "reference"))
+        if detected and NUMBERED_HEADING_RE.match(text) and list_context and not heading_match:
+            detected = None
+        if heading_match or detected:
+            flush(include_empty=True)
+            if heading_match:
+                current_level = int(heading_match.group(1))
+                current_title = text
+            else:
+                current_level, current_title = detected or (2, text)
         else:
             current_lines.append(text)
-    for table in document.tables:
-        for row in table.rows:
-            row_text = " | ".join(_clean_line(cell.text) for cell in row.cells if _clean_line(cell.text))
-            if row_text:
-                current_lines.append(row_text)
-    flush()
+    flush(include_empty=True)
+    sections.extend(_table_week_sections(document))
     return title, sections
 
 
@@ -198,6 +271,7 @@ class ParsedDocument:
     sections: list[ParsedSection]
     objectives: list[str]
     recommended_readings: list[str]
+    weekly_topics: list[str]
 
 
 def parse_document(filename: str, data: bytes) -> ParsedDocument:
@@ -207,6 +281,7 @@ def parse_document(filename: str, data: bytes) -> ParsedDocument:
     parsed: list[ParsedSection] = []
     objectives: list[str] = []
     readings: list[str] = []
+    weekly_topics: list[str] = []
 
     for position, (level, section_title, section_lines) in enumerate(raw_sections):
         section_title = _clean_line(section_title) or f"Section {position + 1}"
@@ -228,6 +303,8 @@ def parse_document(filename: str, data: bytes) -> ParsedDocument:
         )
         stack.append((level, position, section_title))
         lower_title = section_title.lower()
+        if WEEK_TITLE_RE.match(section_title):
+            weekly_topics.append(section_title[:300])
         if any(term in lower_title for term in ("objective", "learning outcome", "learning outcomes")):
             objectives.extend(_extract_list(section_lines))
         if any(term in lower_title for term in ("recommended reading", "reading list", "references", "bibliography")):
@@ -237,7 +314,8 @@ def parse_document(filename: str, data: bytes) -> ParsedDocument:
         parsed = [ParsedSection("Complete document", 1, "", 0, None, "Complete document")]
     objectives = list(dict.fromkeys(objectives))[:30]
     readings = list(dict.fromkeys(readings))[:60]
-    return ParsedDocument(title=title[:200], sections=parsed, objectives=objectives, recommended_readings=readings)
+    weekly_topics = list(dict.fromkeys(weekly_topics))[:40]
+    return ParsedDocument(title=title[:200], sections=parsed, objectives=objectives, recommended_readings=readings, weekly_topics=weekly_topics)
 
 
 class CourseContentStore:
@@ -273,6 +351,7 @@ class CourseContentStore:
                     document_type TEXT NOT NULL,
                     objectives JSONB NOT NULL DEFAULT '[]'::jsonb,
                     recommended_readings JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    weekly_topics JSONB NOT NULL DEFAULT '[]'::jsonb,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
                 """,
@@ -290,6 +369,7 @@ class CourseContentStore:
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
                 """,
+                "ALTER TABLE ai_tutor_course_documents ADD COLUMN IF NOT EXISTS weekly_topics JSONB NOT NULL DEFAULT '[]'::jsonb",
                 "CREATE INDEX IF NOT EXISTS idx_ai_tutor_course_docs_class ON ai_tutor_course_documents(class_id, created_at)",
                 "CREATE INDEX IF NOT EXISTS idx_ai_tutor_course_sections_class ON ai_tutor_course_sections(class_id, document_id, position)",
             ]
@@ -302,7 +382,7 @@ class CourseContentStore:
         CREATE TABLE IF NOT EXISTS ai_tutor_course_documents (
             id TEXT PRIMARY KEY, class_id TEXT NOT NULL, uploader_id TEXT NOT NULL,
             title TEXT NOT NULL, filename TEXT NOT NULL, document_type TEXT NOT NULL,
-            objectives TEXT NOT NULL DEFAULT '[]', recommended_readings TEXT NOT NULL DEFAULT '[]',
+            objectives TEXT NOT NULL DEFAULT '[]', recommended_readings TEXT NOT NULL DEFAULT '[]', weekly_topics TEXT NOT NULL DEFAULT '[]',
             created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS ai_tutor_course_sections (
@@ -316,6 +396,9 @@ class CourseContentStore:
         """
         with self._lock, self._sqlite() as conn:
             conn.executescript(schema)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(ai_tutor_course_documents)").fetchall()}
+            if "weekly_topics" not in columns:
+                conn.execute("ALTER TABLE ai_tutor_course_documents ADD COLUMN weekly_topics TEXT NOT NULL DEFAULT '[]'")
             conn.commit()
 
     def ingest_document(
@@ -342,11 +425,11 @@ class CourseContentStore:
                 )
                 cur.execute(
                     """INSERT INTO ai_tutor_course_documents
-                       (id,class_id,uploader_id,title,filename,document_type,objectives,recommended_readings,created_at)
-                       VALUES(%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s)""",
+                       (id,class_id,uploader_id,title,filename,document_type,objectives,recommended_readings,weekly_topics,created_at)
+                       VALUES(%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s)""",
                     (
                         document_id, class_id, uploader_id, parsed.title, filename, document_type,
-                        _json(parsed.objectives), _json(parsed.recommended_readings), now,
+                        _json(parsed.objectives), _json(parsed.recommended_readings), _json(parsed.weekly_topics), now,
                     ),
                 )
                 for section in parsed.sections:
@@ -373,11 +456,11 @@ class CourseContentStore:
                     conn.execute("DELETE FROM ai_tutor_course_documents WHERE id=?", (old_id,))
                 conn.execute(
                     """INSERT INTO ai_tutor_course_documents
-                       (id,class_id,uploader_id,title,filename,document_type,objectives,recommended_readings,created_at)
-                       VALUES(?,?,?,?,?,?,?,?,?)""",
+                       (id,class_id,uploader_id,title,filename,document_type,objectives,recommended_readings,weekly_topics,created_at)
+                       VALUES(?,?,?,?,?,?,?,?,?,?)""",
                     (
                         document_id, class_id, uploader_id, parsed.title, filename, document_type,
-                        _json(parsed.objectives), _json(parsed.recommended_readings), now.isoformat(),
+                        _json(parsed.objectives), _json(parsed.recommended_readings), _json(parsed.weekly_topics), now.isoformat(),
                     ),
                 )
                 for section in parsed.sections:
@@ -406,6 +489,7 @@ class CourseContentStore:
             "document_type": str(row.get("document_type", "teaching_notes")),
             "objectives": _safe_json(row.get("objectives"), []),
             "recommended_readings": _safe_json(row.get("recommended_readings"), []),
+            "weekly_topics": _safe_json(row.get("weekly_topics"), []),
             "created_at": _iso(row.get("created_at")),
         }
 
@@ -471,7 +555,7 @@ class CourseContentStore:
     def get_section(self, section_id: str) -> dict[str, Any] | None:
         sql = """
         SELECT s.*, d.title AS document_title, d.filename, d.document_type,
-               d.objectives, d.recommended_readings
+               d.objectives, d.recommended_readings, d.weekly_topics
         FROM ai_tutor_course_sections s
         JOIN ai_tutor_course_documents d ON d.id=s.document_id
         WHERE s.id={placeholder}
@@ -496,8 +580,53 @@ class CourseContentStore:
             "document_type": str(data.get("document_type", "teaching_notes")),
             "objectives": _safe_json(data.get("objectives"), []),
             "recommended_readings": _safe_json(data.get("recommended_readings"), []),
+            "weekly_topics": _safe_json(data.get("weekly_topics"), []),
         })
         return result
+
+    def weekly_plan(self, class_id: str, fallback_topics: list[str] | None = None, fallback_outcomes: list[str] | None = None) -> list[dict[str, Any]]:
+        documents = self.list_structure(class_id)
+        entries: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for document in documents:
+            if document.get("document_type") != "course_outline":
+                continue
+            sections = document.get("sections", [])
+            for section in sections:
+                title = str(section.get("title", "")).strip()
+                if not WEEK_TITLE_RE.match(title):
+                    continue
+                key = title.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                children = [
+                    {
+                        "id": str(child.get("id", "")),
+                        "title": str(child.get("title", "")),
+                        "section_path": str(child.get("section_path", child.get("title", ""))),
+                    }
+                    for child in sections
+                    if str(child.get("parent_id", "")) == str(section.get("id", "")) and str(child.get("title", "")).strip()
+                ]
+                entries.append({
+                    "id": str(section.get("id", "")), "title": title,
+                    "section_path": str(section.get("section_path", title)),
+                    "subunits": children, "generated": False,
+                })
+        if entries:
+            return entries[:40]
+        topics = [str(item).strip() for item in (fallback_topics or []) if str(item).strip()]
+        if not topics:
+            topics = [str(item).strip() for item in (fallback_outcomes or []) if str(item).strip()]
+        return [
+            {
+                "id": f"virtual:{class_id}:{index}",
+                "title": topic if WEEK_TITLE_RE.match(topic) else f"Week {index + 1}: {topic}",
+                "section_path": topic, "subunits": [], "generated": True,
+            }
+            for index, topic in enumerate(topics[:40])
+        ]
 
     def recommended_context(self, class_id: str, limit_chars: int = 14000) -> tuple[str, list[str]]:
         documents = self.list_structure(class_id)

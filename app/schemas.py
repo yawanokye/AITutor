@@ -12,9 +12,9 @@ class SpeechRequest(BaseModel):
 
 class VisualStep(BaseModel):
     title: str = Field(default="", max_length=120)
-    explanation: str = Field(default="", max_length=700)
+    explanation: str = Field(default="", max_length=1800)
     equation: str = Field(default="", max_length=500)
-    narration: str = Field(default="", max_length=900)
+    narration: str = Field(default="", max_length=2200)
     learner_prompt: str = Field(default="", max_length=500)
 
 
@@ -80,7 +80,7 @@ class VisualPlan(BaseModel):
     ] = "none"
     title: str = Field(default="", max_length=160)
     caption: str = Field(default="", max_length=700)
-    steps: list[VisualStep] = Field(default_factory=list, max_length=8)
+    steps: list[VisualStep] = Field(default_factory=list, max_length=14)
     equations: list[str] = Field(default_factory=list, max_length=8)
     x_label: str = Field(default="x", max_length=80)
     y_label: str = Field(default="y", max_length=80)
@@ -90,7 +90,7 @@ class VisualPlan(BaseModel):
     nodes: list[DiagramNode] = Field(default_factory=list, max_length=12)
     edges: list[DiagramEdge] = Field(default_factory=list, max_length=20)
     annotations: list[VisualAnnotation] = Field(default_factory=list, max_length=8)
-    slides: list[VisualSlide] = Field(default_factory=list, max_length=14)
+    slides: list[VisualSlide] = Field(default_factory=list, max_length=20)
 
     @field_validator("equations", "table_headers", mode="after")
     @classmethod
@@ -148,6 +148,7 @@ class PracticeQuestion(BaseModel):
     hint: str = Field(default="", max_length=600)
     explanation: str = Field(default="", max_length=1200)
     difficulty: Literal["foundation", "standard", "challenge"] = "standard"
+    response_mode: Literal["student_choice", "typed", "voice", "whiteboard"] = "student_choice"
     visual: VisualPlan | None = None
 
 
@@ -178,6 +179,8 @@ class PracticeQuestionResponse(BaseModel):
     hint: str = ""
     score: int = 0
     completed: bool = False
+    response_mode: Literal["student_choice", "typed", "voice", "whiteboard"] = "student_choice"
+    allowed_response_modes: list[Literal["typed", "voice", "whiteboard"]] = Field(default_factory=lambda: ["typed", "voice", "whiteboard"])
 
 
 class PracticeCheckResponse(BaseModel):
@@ -271,6 +274,7 @@ class ClassCreateRequest(BaseModel):
     recommended_readings: list[str] = Field(default_factory=list, max_length=60)
     tutor_instructions: str = Field(default="", max_length=5000)
     practice_whiteboard_required: bool = False
+    practice_response_mode: Literal["student_choice", "typed", "voice", "whiteboard"] = "student_choice"
 
 
 class ClassProfileUpdateRequest(BaseModel):
@@ -282,6 +286,7 @@ class ClassProfileUpdateRequest(BaseModel):
     recommended_readings: list[str] = Field(default_factory=list, max_length=60)
     tutor_instructions: str = Field(default="", max_length=5000)
     practice_whiteboard_required: bool = False
+    practice_response_mode: Literal["student_choice", "typed", "voice", "whiteboard"] = "student_choice"
 
 
 class ClassJoinRequest(BaseModel):
@@ -301,6 +306,7 @@ class ClassPublic(BaseModel):
     recommended_readings: list[str] = Field(default_factory=list)
     tutor_instructions: str = ""
     practice_whiteboard_required: bool = False
+    practice_response_mode: Literal["student_choice", "typed", "voice", "whiteboard"] = "student_choice"
     created_at: str = ""
 
 
@@ -349,7 +355,7 @@ class LessonVideoPlan(BaseModel):
     title: str = Field(default="Lesson video", max_length=180)
     learning_objectives: list[str] = Field(default_factory=list, max_length=5)
     script: str = Field(min_length=20, max_length=7000)
-    slides: list[VisualSlide] = Field(default_factory=list, max_length=14)
+    slides: list[VisualSlide] = Field(default_factory=list, max_length=20)
     estimated_minutes: float = Field(default=2.0, ge=0.5, le=12)
 
 
@@ -453,11 +459,11 @@ class SectionLessonPlan(BaseModel):
     title: str = Field(default="Course section lesson", max_length=200)
     learning_objectives: list[str] = Field(default_factory=list, max_length=8)
     introduction: str = Field(default="", max_length=1800)
-    detailed_notes: list[LessonNoteBlock] = Field(default_factory=list, max_length=14)
+    detailed_notes: list[LessonNoteBlock] = Field(default_factory=list, max_length=20)
     key_terms: list[str] = Field(default_factory=list, max_length=16)
     summary: str = Field(default="", max_length=1800)
     self_check_questions: list[str] = Field(default_factory=list, max_length=8)
-    slides: list[VisualSlide] = Field(default_factory=list, max_length=14)
+    slides: list[VisualSlide] = Field(default_factory=list, max_length=20)
 
 
 class SectionTeachResponse(BaseModel):
@@ -467,3 +473,6 @@ class SectionTeachResponse(BaseModel):
     sources: list[str] = Field(default_factory=list)
     visual: VisualPlan | None = None
     practice_whiteboard_required: bool = False
+    practice_response_mode: Literal["student_choice", "typed", "voice", "whiteboard"] = "student_choice"
+    section_path: str = ""
+    generated_from_outcomes: bool = False

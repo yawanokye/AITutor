@@ -79,7 +79,7 @@ logger = logging.getLogger("ai_tutor")
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title=settings.app_name, version="5.0.3")
+app = FastAPI(title=settings.app_name, version="5.1.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -628,6 +628,10 @@ async def health() -> dict[str, Any]:
         "structured_course_content_enabled": True,
         "separate_practice_whiteboard_enabled": True,
         "detailed_slide_teaching_enabled": True,
+        "student_focused_interface_enabled": True,
+        "multimodal_practice_responses_enabled": True,
+        "scrolling_fullscreen_whiteboards_enabled": True,
+        "weekly_course_plan_enabled": True,
     }
 
 
@@ -904,8 +908,12 @@ def _practice_public_question(practice_id: str, state: dict[str, Any]) -> Practi
             visual=None,
             score=int(state.get("total_score", 0)),
             completed=True,
+            response_mode=str(state.get("practice_response_mode", "student_choice")),
+            allowed_response_modes=["typed", "voice", "whiteboard"],
         )
     question = activity.questions[index]
+    response_mode = str(state.get("practice_response_mode") or question.response_mode or "student_choice")
+    allowed_modes = ["typed", "voice", "whiteboard"] if response_mode == "student_choice" else [response_mode]
     return PracticeQuestionResponse(
         practice_id=practice_id,
         title=activity.title,
@@ -919,6 +927,8 @@ def _practice_public_question(practice_id: str, state: dict[str, Any]) -> Practi
         hint=question.hint,
         score=int(state.get("total_score", 0)),
         completed=False,
+        response_mode=response_mode,
+        allowed_response_modes=allowed_modes,
     )
 
 
@@ -972,6 +982,10 @@ async def start_practice(
         learning_outcome=learning_outcome, weekly_topic=weekly_topic
     )
     course = str(learning["course"])
+    classroom = learning.get("classroom") or {}
+    practice_response_mode = str(classroom.get("practice_response_mode") or ("whiteboard" if classroom.get("practice_whiteboard_required") else "student_choice"))
+    if practice_response_mode not in {"student_choice", "typed", "voice", "whiteboard"}:
+        practice_response_mode = "student_choice"
     topic = topic.strip()
     if not topic:
         raise HTTPException(status_code=422, detail="Enter a topic for guided practice.")
@@ -1000,7 +1014,7 @@ async def start_practice(
             result = await run_in_threadpool(
                 ai_router.generate_structured,
                 schema=PracticeActivity,
-                instructions=practice_generation_instructions(level=level[:80], course=course[:160], count=count),
+                instructions=practice_generation_instructions(level=level[:80], course=course[:160], count=count, response_mode=practice_response_mode),
                 prompt=prompt,
                 task="practice_generation",
                 max_tokens=max(settings.visual_max_output_tokens, 5000),
@@ -1013,6 +1027,8 @@ async def start_practice(
             raise HTTPException(status_code=502, detail=f"Practice generation error: {type(exc).__name__}") from exc
 
     activity = _normalise_practice_activity(activity)
+    for generated_question in activity.questions:
+        generated_question.response_mode = practice_response_mode
     practice_id = str(uuid.uuid4())
     practice_sessions[practice_id] = {
         "activity": activity,
@@ -1027,7 +1043,8 @@ async def start_practice(
         "learning_outcome": str(learning["learning_outcome"]),
         "weekly_topic": str(learning["weekly_topic"]),
         "knowledge_mode": str(learning["knowledge_mode"]),
-        "practice_whiteboard_required": bool((learning.get("classroom") or {}).get("practice_whiteboard_required", False)),
+        "practice_whiteboard_required": practice_response_mode == "whiteboard",
+        "practice_response_mode": practice_response_mode,
         "level": level,
     }
     if user:
@@ -1054,6 +1071,7 @@ async def check_practice_answer(
     practice_id: str = Form(...),
     answer: str = Form(default=""),
     board_image: UploadFile | None = File(default=None),
+    audio_response: UploadFile | None = File(default=None),
 ) -> PracticeCheckResponse:
     _check_rate_limit(request)
     user = _ai_user(request)
@@ -1067,19 +1085,30 @@ async def check_practice_answer(
     question = activity.questions[index]
     answer = answer.strip()
     board = await _read_image(board_image, label="Learner's practice working on the practice whiteboard")
-    if bool(state.get("practice_whiteboard_required")) and not board:
+    voice_transcript = ""
+    if audio_response is not None:
+        voice_transcript = await _transcribe_audio_upload(audio_response)
+    response_mode = str(state.get("practice_response_mode", "student_choice"))
+    if response_mode == "typed" and not answer:
+        raise HTTPException(status_code=422, detail="Your lecturer requires a typed response for this practice question.")
+    if response_mode == "voice" and not voice_transcript:
+        raise HTTPException(status_code=422, detail="Your lecturer requires a recorded voice response for this practice question.")
+    if response_mode == "whiteboard" and not board:
         raise HTTPException(status_code=422, detail="Your lecturer requires a handwritten whiteboard response for this practice question.")
-    if not answer and not board:
-        raise HTTPException(status_code=422, detail="Enter an answer or attach your practice-whiteboard working.")
+    if not answer and not board and not voice_transcript:
+        raise HTTPException(status_code=422, detail="Type, record, or write a response before checking your answer.")
+    combined_answer = answer
+    if voice_transcript:
+        combined_answer = f"{answer}\n\nVOICE RESPONSE TRANSCRIPT\n{voice_transcript}".strip()
     attempts = int(state["attempts"].get(question.id, 0)) + 1
     state["attempts"][question.id] = attempts
     marking_text = (
         f"QUESTION\n{question.prompt}\n\nEXPECTED ANSWER\n{question.expected_answer}\n\n"
         f"ACCEPTED VARIANTS\n{'; '.join(question.accepted_variants)}\n\n"
-        f"MARKING GUIDE\n{question.marking_guide}\n\nLEARNER ANSWER\n{answer or '[supplied as whiteboard image]'}"
+        f"MARKING GUIDE\n{question.marking_guide}\n\nREQUIRED RESPONSE MODE\n{response_mode}\n\nLEARNER ANSWER\n{combined_answer or '[supplied as whiteboard image]'}"
     )
     if settings.demo_mode:
-        normalised_answer = re.sub(r"\s+", " ", answer.lower()).strip()
+        normalised_answer = re.sub(r"\s+", " ", combined_answer.lower()).strip()
         terms = [t for t in re.findall(r"[a-zA-Z]{4,}", question.expected_answer.lower()) if t not in {"clear", "correct", "answer", "explanation"}]
         overlap = sum(term in normalised_answer for term in terms[:8])
         correct = bool(normalised_answer) and overlap >= max(1, min(2, len(terms)))
@@ -1109,7 +1138,7 @@ async def check_practice_answer(
         try:
             event_meta = {
                 "correct": evaluation.correct, "attempts": attempts, "question_id": question.id,
-                "used_whiteboard": bool(board), "misconception": evaluation.misconception,
+                "used_whiteboard": bool(board), "used_voice": bool(voice_transcript), "response_mode": response_mode, "misconception": evaluation.misconception,
                 "learning_outcome": state.get("learning_outcome", ""),
                 "weekly_topic": state.get("weekly_topic", ""),
             }
@@ -1266,10 +1295,7 @@ async def check_whiteboard_work(
     return WorkCheckResponse(**result.model_dump(), visual=visual)
 
 
-@app.post("/api/transcribe")
-async def transcribe(request: Request, audio: UploadFile = File(...)) -> dict[str, str]:
-    _check_rate_limit(request)
-    _ai_user(request)
+async def _transcribe_audio_upload(audio: UploadFile) -> str:
     openai_client = _require_openai()
     extension = _audio_upload_extension(audio.filename, audio.content_type)
     if extension is None:
@@ -1303,7 +1329,14 @@ async def transcribe(request: Request, audio: UploadFile = File(...)) -> dict[st
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Transcription service error: {type(exc).__name__}") from exc
     text = getattr(result, "text", "") or ""
-    return {"text": text.strip()}
+    return text.strip()
+
+
+@app.post("/api/transcribe")
+async def transcribe(request: Request, audio: UploadFile = File(...)) -> dict[str, str]:
+    _check_rate_limit(request)
+    _ai_user(request)
+    return {"text": await _transcribe_audio_upload(audio)}
 
 
 @app.post("/api/speech")
@@ -1572,6 +1605,7 @@ async def create_class(request: Request, payload: ClassCreateRequest) -> ClassPu
         recommended_readings=payload.recommended_readings,
         tutor_instructions=payload.tutor_instructions,
         practice_whiteboard_required=payload.practice_whiteboard_required,
+        practice_response_mode=payload.practice_response_mode,
     )
     return ClassPublic(**row)
 
@@ -1592,6 +1626,7 @@ async def update_class_profile(request: Request, class_id: str, payload: ClassPr
             recommended_readings=payload.recommended_readings,
             tutor_instructions=payload.tutor_instructions,
             practice_whiteboard_required=payload.practice_whiteboard_required,
+            practice_response_mode=payload.practice_response_mode,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1820,7 +1855,11 @@ async def course_structure(request: Request, class_id: str) -> dict[str, Any]:
     if not classroom:
         raise HTTPException(status_code=403, detail="You do not have access to this course.")
     documents = await run_in_threadpool(course_content.list_structure, class_id)
-    return {"classroom": classroom, "documents": documents}
+    weekly_plan = await run_in_threadpool(
+        course_content.weekly_plan, class_id,
+        list(classroom.get("weekly_topics", [])), list(classroom.get("learning_outcomes", []))
+    )
+    return {"classroom": classroom, "documents": documents, "weekly_plan": weekly_plan}
 
 
 @app.post("/api/course/sections/{section_id}/teach", response_model=SectionTeachResponse)
@@ -1829,39 +1868,98 @@ async def teach_course_section(request: Request, section_id: str, payload: Secti
     user = _ai_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Sign in to open a course subsection.")
+
     section = await run_in_threadpool(course_content.get_section, section_id)
-    if not section:
+    classroom: dict[str, Any] | None = None
+    generated_from_outcomes = False
+    if section:
+        class_id = str(section.get("class_id", ""))
+        classroom = await run_in_threadpool(
+            accounts.class_for_user, class_id=class_id, user_id=str(user["id"]), role=str(user["role"])
+        )
+    elif section_id.startswith("virtual:"):
+        parts = section_id.split(":", 2)
+        if len(parts) != 3:
+            raise HTTPException(status_code=404, detail="The selected course topic was not found.")
+        class_id = parts[1]
+        try:
+            topic_index = int(parts[2])
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="The selected course topic was not found.") from exc
+        classroom = await run_in_threadpool(
+            accounts.class_for_user, class_id=class_id, user_id=str(user["id"]), role=str(user["role"])
+        )
+        if classroom:
+            topics = [str(item) for item in classroom.get("weekly_topics", []) if str(item).strip()]
+            if not topics:
+                topics = [str(item) for item in classroom.get("learning_outcomes", []) if str(item).strip()]
+            if topic_index < 0 or topic_index >= len(topics):
+                raise HTTPException(status_code=404, detail="The selected course topic was not found.")
+            topic_title = topics[topic_index]
+            section = {
+                "id": section_id, "class_id": class_id, "title": topic_title,
+                "section_path": topic_title, "content": "",
+                "document_title": "Course profile and expected outcomes",
+                "filename": "Lecturer course outline and objectives",
+                "document_type": "course_outline",
+                "objectives": list(classroom.get("learning_outcomes", [])),
+                "recommended_readings": list(classroom.get("recommended_readings", [])),
+            }
+            generated_from_outcomes = True
+    else:
         raise HTTPException(status_code=404, detail="The selected course subsection was not found.")
-    class_id = str(section.get("class_id", ""))
-    classroom = await run_in_threadpool(
-        accounts.class_for_user, class_id=class_id, user_id=str(user["id"]), role=str(user["role"])
-    )
-    if not classroom:
+
+    if not classroom or not section:
         raise HTTPException(status_code=403, detail="You do not have access to this course subsection.")
+
+    class_id = str(section.get("class_id", ""))
     selected_text = str(section.get("content", "")).strip()
-    if not selected_text:
-        raise HTTPException(status_code=422, detail="This subsection does not contain readable teaching text.")
-    reading_context, reading_sources = await run_in_threadpool(course_content.recommended_context, class_id)
-    listed_readings = [str(item) for item in classroom.get("recommended_readings", [])]
-    sources = list(dict.fromkeys([
-        str(section.get("filename", "Course material")),
-        *[item for item in reading_sources if item],
-    ]))
+    section_path = str(section.get("section_path") or section.get("title") or "Course topic")
     course_name = str(classroom.get("subject") or classroom.get("name") or "Course")
-    objectives_text = "\n".join(f"- {item}" for item in classroom.get("learning_outcomes", []))
+    objectives = [str(item) for item in classroom.get("learning_outcomes", []) if str(item).strip()]
+    expected_topics = [str(item) for item in classroom.get("weekly_topics", []) if str(item).strip()]
+    listed_readings = [str(item) for item in classroom.get("recommended_readings", []) if str(item).strip()]
+
+    related_context, related_sources = await run_in_threadpool(
+        _course_context,
+        " ".join([course_name, section_path, *objectives[:8]]),
+        class_id=class_id,
+        knowledge_mode=str(classroom.get("knowledge_mode") or "course_only"),
+    )
+    reading_context, reading_sources = await run_in_threadpool(course_content.recommended_context, class_id)
+    if not selected_text and not related_context:
+        generated_from_outcomes = True
+
+    sources: list[str] = []
+    if selected_text and section.get("filename"):
+        sources.append(str(section.get("filename")))
+    sources.extend(str(item) for item in related_sources if item)
+    sources.extend(str(item) for item in reading_sources if item)
+    if not sources:
+        sources.append("Lecturer course objectives, expected outcomes and weekly plan")
+    sources = list(dict.fromkeys(sources))
+
+    objectives_text = "\n".join(f"- {item}" for item in objectives)
+    weekly_text = "\n".join(f"- {item}" for item in expected_topics)
     reading_list_text = "\n".join(f"- {item}" for item in listed_readings)
     prompt = (
         f"COURSE\n{course_name}\n\n"
-        f"COURSE LEARNING OBJECTIVES\n{objectives_text or 'No objectives were extracted.'}\n\n"
-        f"SELECTED DOCUMENT\n{section.get('document_title', '')} [{section.get('filename', '')}]\n\n"
-        f"SELECTED SUBSECTION\n{section.get('section_path') or section.get('title')}\n\n"
-        f"LECTURER TEACHING TEXT\n{selected_text[:50000]}\n\n"
-        f"RECOMMENDED READING LIST\n{reading_list_text or 'No reading list was extracted.'}\n\n"
-        f"APPROVED READING EXTRACTS\n{reading_context[:18000] or 'No approved reading extract was uploaded.'}\n\n"
-        f"LECTURER INSTRUCTIONS\n{classroom.get('tutor_instructions') or 'No additional instructions.'}"
+        f"SELECTED TOPIC OR SUBSECTION\n{section_path}\n\n"
+        f"COURSE LEARNING OBJECTIVES AND EXPECTED OUTCOMES\n{objectives_text or 'No objectives were listed.'}\n\n"
+        f"WEEK-BY-WEEK COURSE PLAN\n{weekly_text or 'No weekly plan was listed.'}\n\n"
+        f"LECTURER TEACHING TEXT FOR THE SELECTED SECTION\n{selected_text[:50000] or 'No lecturer teaching note was uploaded for this section.'}\n\n"
+        f"RELATED APPROVED COURSE EXTRACTS\n{related_context[:26000] or 'No additional approved teaching extract was found.'}\n\n"
+        f"RECOMMENDED READING LIST\n{reading_list_text or 'No reading list was uploaded.'}\n\n"
+        f"APPROVED READING EXTRACTS\n{reading_context[:20000] or 'No recommended reading extract was uploaded.'}\n\n"
+        f"LECTURER INSTRUCTIONS\n{classroom.get('tutor_instructions') or 'No additional instructions.'}\n\n"
+        "AUTHORISATION FOR INSTRUCTIONAL EXPANSION\n"
+        "When teaching notes or readings are absent or too brief, construct complete teaching notes from the listed topic, objectives and expected outcomes. "
+        "Develop any additional subtopics needed for full understanding, while avoiding invented quotations, sources or claims attributed to the lecturer."
     )
+
     if settings.demo_mode:
-        plan = _demo_section_plan(str(section.get("title", "Course subsection")), selected_text)
+        seed = selected_text or related_context or "\n".join([section_path, *objectives])
+        plan = _demo_section_plan(str(section.get("title", "Course subsection")), seed)
     else:
         _require_text_ai()
         try:
@@ -1873,7 +1971,7 @@ async def teach_course_section(request: Request, section_id: str, payload: Secti
                 ),
                 prompt=prompt,
                 task="course_section_lesson",
-                max_tokens=max(settings.deepseek_max_tokens, 7000),
+                max_tokens=max(settings.deepseek_max_tokens, 10000),
                 prefer_deepseek=True,
             )
             plan = result.value if isinstance(result.value, SectionLessonPlan) else SectionLessonPlan.model_validate(result.value)
@@ -1883,6 +1981,7 @@ async def teach_course_section(request: Request, section_id: str, payload: Secti
             raise HTTPException(
                 status_code=502, detail=f"Course subsection lesson error: {type(exc).__name__}"
             ) from exc
+
     if not payload.include_worked_examples:
         for block in plan.detailed_notes:
             block.example = ""
@@ -1892,11 +1991,14 @@ async def teach_course_section(request: Request, section_id: str, payload: Secti
         plan.self_check_questions = []
         for slide in plan.slides:
             slide.check_question = ""
+
     answer = _section_plan_answer(plan)
     visual = VisualPlan(
         kind="slides",
         title=plan.title,
-        caption="Detailed lecturer-grounded slides. Use Previous and Next, or select Teach step by step for narrated teaching.",
+        caption=(
+            "Complete teaching slides aligned with the detailed notes. Each slide includes the explanation and narration needed to learn directly from the whiteboard."
+        ),
         slides=plan.slides,
     )
     try:
@@ -1905,22 +2007,28 @@ async def teach_course_section(request: Request, section_id: str, payload: Secti
             user_id=str(user["id"]),
             class_id=class_id,
             event_type="course_section_opened",
-            topic=str(section.get("section_path") or section.get("title")),
+            topic=section_path,
             metadata={
                 "section_id": section_id,
                 "document": section.get("filename", ""),
                 "detail": payload.detail,
+                "generated_from_outcomes": generated_from_outcomes,
             },
         )
     except Exception:
         logger.exception("Course subsection activity could not be recorded")
+
+    response_mode = str(classroom.get("practice_response_mode") or ("whiteboard" if classroom.get("practice_whiteboard_required") else "student_choice"))
     return SectionTeachResponse(
         section_id=section_id,
         section_title=str(section.get("title", "Course subsection")),
+        section_path=section_path,
         answer=answer,
         sources=sources,
         visual=visual,
-        practice_whiteboard_required=bool(classroom.get("practice_whiteboard_required", False)),
+        practice_whiteboard_required=response_mode == "whiteboard",
+        practice_response_mode=response_mode,
+        generated_from_outcomes=generated_from_outcomes,
     )
 
 
@@ -2055,6 +2163,18 @@ async def upload_materials(
                         chunk.chunk_index = chunk_index
                         chunk_index += 1
                         all_chunks.append(chunk)
+                if not all_chunks and document_type == "course_outline":
+                    outline_seed = "\n".join([
+                        *[str(item.get("title", "")) for item in document.get("sections", [])],
+                        *[str(item) for item in document.get("objectives", [])],
+                        *[str(item) for item in document.get("weekly_topics", [])],
+                        *[str(item) for item in document.get("recommended_readings", [])],
+                    ]).strip()
+                    if outline_seed:
+                        all_chunks = await run_in_threadpool(
+                            make_chunks, outline_seed, internal_source, class_id=class_id,
+                            material_type=material_type, display_source=filename, repository_scope="course"
+                        )
                 if not all_chunks:
                     raise ValueError("No readable text was found. A scanned PDF may need OCR before upload.")
                 count = await run_in_threadpool(knowledge.replace_source, internal_source, all_chunks)
@@ -2065,6 +2185,7 @@ async def upload_materials(
                         teacher_id=str(user["id"]),
                         objectives=document.get("objectives", []),
                         recommended_readings=document.get("recommended_readings", []),
+                        weekly_topics=document.get("weekly_topics", []),
                     )
                 uploaded.append({
                     "source": filename,
@@ -2076,6 +2197,7 @@ async def upload_materials(
                     "sections": len(document.get("sections", [])),
                     "objectives_found": len(document.get("objectives", [])),
                     "readings_found": len(document.get("recommended_readings", [])),
+                    "weekly_topics_found": len(document.get("weekly_topics", [])),
                 })
             else:
                 text = await run_in_threadpool(extract_text, filename, data)

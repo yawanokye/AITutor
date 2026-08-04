@@ -91,44 +91,54 @@ def visual_plan_instructions(*, has_image: bool, preference: str) -> str:
         else "No display image was supplied. Do not choose image_annotation."
     )
     return f"""
-Create one compact visual teaching plan from the learner question and tutor answer. The plan will be rendered in a live digital whiteboard.
+Create a complete visual teaching plan from the learner question and tutor answer. The plan is a teaching surface, not a brief summary. It must preserve the explanatory depth of the written notes and make each concept understandable without requiring the learner to return to the chat.
 
 Available kinds:
-- steps: worked mathematics, calculations, procedures or sequences
+- steps: detailed worked mathematics, calculations, procedures or conceptual sequences
 - graph: numeric relationships, functions, trends or coordinate examples
 - table: comparisons, classifications or organised values
 - diagram: labelled processes, concepts, systems, cycles or relationships
 - image_annotation: boxes and labels over the learner's uploaded image
-- slides: a detailed mini-lesson of four to ten slides
+- slides: a detailed self-learning lesson of six to eighteen slides
 - none: a visual would add little value
 
 Rules:
 1. {preference_rule}
 2. {image_rule}
-3. Keep it readable on a phone. Use no more than 8 steps, 5 graph series, 30 points per series, 8 table columns, 12 table rows, 10 diagram nodes, 16 edges, 8 annotations or 10 slides. For slide lessons, use the explanation, worked_example, key_terms, check_question and speaker_note fields to teach rather than merely summarise.
-4. For equations, return LaTeX without surrounding dollar signs.
-5. Graph x and y values must be numeric. Sort points by x when a line should connect them.
-6. Diagram node positions use a 1000 by 1000 board. Keep nodes away from the outer 70 units.
-7. Table rows should match the number of headers.
-8. Do not repeat the full tutor answer. The caption should tell the learner how to use the visual.
-9. Use empty arrays for fields that do not apply.
-10. Choose none rather than inventing data, labels, coordinates or relationships.
+3. Match the depth of the tutor answer. Do not reduce a detailed explanation to short headings or unsupported bullets.
+4. When a topic contains several ideas, divide it into a logical sequence of subtopics even when the original course outline does not list every subtopic. The sequence must build complete understanding.
+5. For steps, use up to 14 steps. Each step needs a full explanation, any equation, a narration that can stand alone, and a learner prompt where useful.
+6. For slides, use six to eighteen slides. Every slide must include a meaningful explanation and detailed speaker_note. Add a worked example, key terms and a check question where relevant. Bullets should organise the teaching, not replace it.
+7. For equations, return LaTeX without surrounding dollar signs. Define symbols before using them and show substitutions clearly.
+8. Graph x and y values must be numeric. Sort points by x when a line should connect them.
+9. Diagram node positions use a 1000 by 1000 board. Keep nodes away from the outer 70 units.
+10. Table rows should match the number of headers.
+11. The caption should tell the learner how to use the visual and what understanding they should gain.
+12. Use empty arrays for fields that do not apply. Choose none rather than inventing data, quotations or coordinates.
 """.strip()
 
 
-def practice_generation_instructions(*, level: str, course: str, count: int) -> str:
+def practice_generation_instructions(*, level: str, course: str, count: int, response_mode: str = "student_choice") -> str:
+    mode_rule = {
+        "typed": "Every question must be suitable for a typed response.",
+        "voice": "Every question must be suitable for a spoken response. Avoid questions that require long symbolic working unless the learner can explain the method orally.",
+        "whiteboard": "Every question must require visible handwritten working, notation, a diagram or a worked solution on the practice whiteboard.",
+        "student_choice": "Questions may be answered by typing, voice recording or the practice whiteboard. Do not force one medium.",
+    }.get(response_mode, "Questions may be answered by typing, voice recording or the practice whiteboard.")
     return f"""
 Create a guided practice activity for a learner at {level}. Course or subject: {course or 'Not specified'}.
 Return exactly {count} questions that move from foundation to standard and then challenge where appropriate.
+Required response setting: {response_mode}. {mode_rule}
 
 Rules:
 1. Test understanding, not memorisation alone.
 2. Each question must have one clear prompt, an expected answer, acceptable variants, a marking guide, a useful hint and a teaching explanation.
-3. For quantitative questions, include enough values to solve the problem and check the arithmetic carefully.
-4. Add a compact visual only when it genuinely helps. Do not put the expected answer inside the visible visual.
-5. Keep all questions age-appropriate and independent of any live examination.
-6. Do not invent claims from course materials. Use the supplied extracts as the primary grounding.
-7. Use British English.
+3. Set response_mode to exactly {response_mode!r} for every question.
+4. For quantitative questions, include enough values to solve the problem and check the arithmetic carefully.
+5. Add a compact visual only when it genuinely helps. Do not put the expected answer inside the visible visual.
+6. Keep all questions age-appropriate and independent of any live examination.
+7. Do not invent claims from course materials. Use the supplied extracts as the primary grounding.
+8. Use British English.
 """.strip()
 
 
@@ -185,23 +195,28 @@ Rules:
 
 def section_lesson_instructions(*, level: str, course: str, detail: str) -> str:
     detail_rule = {
-        "standard": "Create 6 to 8 slides and a clear but moderately detailed set of notes.",
-        "detailed": "Create 8 to 12 slides and detailed explanatory notes that can stand alone for self-learning.",
-        "extended": "Create 10 to 14 slides and an extended self-learning lesson with worked examples, misconceptions and self-checks.",
-    }.get(detail, "Create 8 to 12 slides and detailed self-learning notes.")
+        "standard": "Create 8 to 10 slides and a clear, complete lesson.",
+        "detailed": "Create 10 to 15 slides and detailed explanatory notes that stand alone for self-learning.",
+        "extended": "Create 14 to 20 slides and an extended self-learning lesson with worked examples, misconceptions, applications and self-checks.",
+    }.get(detail, "Create 10 to 15 slides and detailed self-learning notes.")
     return f"""
 You are preparing a lecturer-approved AI lesson for a learner at {level}. Course: {course or 'Not specified'}.
 {detail_rule}
 
-Use the selected teaching-note subsection as the main authority. Use recommended readings only to clarify or extend ideas that are consistent with the teaching notes.
+The lesson may be based on lecturer teaching notes, a course-outline topic, learning objectives, expected outcomes, or a combination of them. If no teaching notes or recommended reading extract is available, use the listed objectives, expected outcomes, topic title and lecturer instructions to construct a complete teaching note. Clearly treat this as an AI-developed instructional expansion rather than pretending it was quoted from a source.
 
 Rules:
-1. Begin with focused learning objectives for this subsection.
-2. Build detailed notes in a logical sequence. Define terms, explain why ideas matter, show relationships and address likely misconceptions.
-3. Include worked examples when the content supports them. Do not invent numerical data, quotations, page numbers or references.
-4. Each slide must teach, not merely list headings. Add a concise explanation, essential bullets, a worked example where useful, key terms, one check question and detailed speaker notes.
-5. Slide content and detailed notes must be aligned. The speaker notes should explain how the lecturer or audio tutor presents the slide.
-6. Use British English and readable language appropriate to the learner's level.
-7. End with a summary and self-check questions. Do not include answers to self-check questions unless the selected text supplies them directly.
-8. Return valid JSON matching the requested schema.
+1. Teach as a skilled human lecturer would. Begin from prerequisite ideas, define terms, explain why the concept matters, and build understanding in a logical sequence.
+2. If the selected topic is broad, divide it into additional logical subtopics even when those subdivisions are not explicitly listed in the course outline. Continue until the learner has a coherent and complete understanding of the concept.
+3. Begin with focused learning objectives for this lesson. Align every major explanation, example and self-check to those objectives and the course's expected outcomes.
+4. Create detailed notes with enough explanation to stand alone. Each note block must explain the idea, show relationships, include an example where useful, and state a key point.
+5. Address common misconceptions and explain why incorrect interpretations fail.
+6. For quantitative or procedural topics, show complete worked examples step by step, define symbols, substitute values and verify the result.
+7. Each slide must teach at the same depth as the written notes. Do not make the slides shorter or less informative than the notes. Every slide needs a substantial explanation and detailed speaker_note. Add worked examples, equations, key terms and check questions where relevant.
+8. Organise long lessons across enough slides rather than crowding or summarising. The visual whiteboard should be usable as the main teaching medium.
+9. Do not invent numerical data, quotations, page numbers, references or claims attributed to uploaded readings.
+10. Use British English and readable language appropriate to the learner's level.
+11. End with an integrated summary and self-check questions. Do not provide self-check answers unless the lesson format requires worked feedback.
+12. Return valid JSON matching the requested schema.
 """.strip()
+
