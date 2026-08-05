@@ -30,7 +30,7 @@
     try {
       const visual = state.visualPlan?.kind === 'image_annotation' ? null : state.visualPlan;
       const payload = {
-        version: '5.2.0',
+        version: '5.3.0',
         sessionId: state.sessionId,
         chatLog: state.chatLog.slice(-80),
         lastAnswer: state.lastAnswer,
@@ -167,66 +167,211 @@
     return [intro, visualPlanToSpeech(plan)].filter(Boolean).join('. ');
   }
 
-  function visualTeachingSegments(plan, index, includeIntro = false) {
-    const segments = [];
-    const push = (text, selector = '', pause = 500) => {
-      const clean = String(text || '').replace(/\s+/g, ' ').trim();
-      if (clean) segments.push({ text: clean, selector, pause });
-    };
-    if (includeIntro) push([plan.title, plan.caption].filter(Boolean).join('. '), '', 700);
-    if (plan.kind === 'steps') {
-      const step = plan.steps?.[index] || {};
-      push(`Step ${index + 1}. ${step.title || ''}`, '[data-teach-section-block="title"]', 500);
-      narrationSentences(step.narration || step.explanation).forEach((sentence, sentenceIndex) => {
-        push(sentence, `[data-teach-section="explanation"][data-teach-sentence="${sentenceIndex}"]`, 420);
-      });
-      push(step.equation ? `The equation is ${step.equation}` : '', '[data-teach-section-block="equation"]', 700);
-      push(step.learner_prompt ? `Now think about this. ${step.learner_prompt}` : '', '[data-teach-section-block="learner-prompt"]', 1400);
-      return segments;
-    }
-    if (plan.kind === 'slides') {
-      const slide = plan.slides?.[index] || {};
-      push(slide.title, '[data-teach-section-block="title"]', 550);
-      (slide.bullets || []).forEach((bullet, bulletIndex) => {
-        narrationSentences(bullet).forEach((sentence, sentenceIndex) => {
-          push(sentence, `[data-teach-section="bullet-${bulletIndex}"][data-teach-sentence="${sentenceIndex}"]`, 380);
-        });
-      });
-      narrationSentences(slide.explanation).forEach((sentence, sentenceIndex) => {
-        push(sentence, `[data-teach-section="explanation"][data-teach-sentence="${sentenceIndex}"]`, 520);
-      });
-      push(slide.equation ? `Look at this expression. ${slide.equation}` : '', '[data-teach-section-block="equation"]', 800);
-      narrationSentences(slide.worked_example).forEach((sentence, sentenceIndex) => {
-        push(sentence, `[data-teach-section="worked-example"][data-teach-sentence="${sentenceIndex}"]`, 620);
-      });
-      (slide.key_terms || []).forEach((term, termIndex) => {
-        push(`A key term here is ${term}.`, `[data-teach-term="${termIndex}"]`, 350);
-      });
-      narrationSentences(slide.speaker_note).forEach((sentence, sentenceIndex) => {
-        push(sentence, `[data-teach-section="speaker-note"][data-teach-sentence="${sentenceIndex}"]`, 560);
-      });
-      narrationSentences(slide.check_question).forEach((sentence, sentenceIndex) => {
-        push(`Check your understanding. ${sentence}`, `[data-teach-section="check-question"][data-teach-sentence="${sentenceIndex}"]`, 1800);
-      });
-      return segments;
-    }
-    push(visualPlanToSpeech(plan), '', 600);
-    return segments;
+  function normalisedLectureText(text) {
+    return String(text || '').replace(/\s+/g, ' ').trim();
   }
 
-  function clearTeachingHighlight() {
-    visualContent.querySelectorAll('.teaching-current, .teaching-section-current').forEach(node => {
-      node.classList.remove('teaching-current', 'teaching-section-current');
+  function lectureSentenceGroups(text, maxWords = 42) {
+    const sentences = narrationSentences(text);
+    const groups = [];
+    let current = [];
+    let words = 0;
+    sentences.forEach((sentence, sentenceIndex) => {
+      const count = sentence.split(/\s+/).filter(Boolean).length;
+      if (current.length && words + count > maxWords) {
+        groups.push(current);
+        current = [];
+        words = 0;
+      }
+      current.push({ sentence, sentenceIndex });
+      words += count;
+    });
+    if (current.length) groups.push(current);
+    return groups;
+  }
+
+  function slideDetailedTexts(slide) {
+    const explanation = normalisedLectureText(slide?.explanation);
+    const speakerNote = normalisedLectureText(slide?.speaker_note);
+    if (!speakerNote) return [{ key: 'explanation', text: explanation }].filter(item => item.text);
+    if (!explanation) return [{ key: 'speaker-note', text: speakerNote }];
+    const a = explanation.toLowerCase();
+    const b = speakerNote.toLowerCase();
+    if (a.includes(b)) return [{ key: 'explanation', text: explanation }];
+    if (b.includes(a)) return [{ key: 'speaker-note', text: speakerNote }];
+    return [
+      { key: 'explanation', text: explanation },
+      { key: 'speaker-note', text: speakerNote },
+    ];
+  }
+
+  function naturalList(items) {
+    const clean = (items || []).map(normalisedLectureText).filter(Boolean);
+    if (!clean.length) return '';
+    if (clean.length === 1) return clean[0];
+    if (clean.length === 2) return `${clean[0]}, and ${clean[1]}`;
+    return `${clean.slice(0, -1).join(', ')}, and ${clean.at(-1)}`;
+  }
+
+  function visualTeachingBeats(plan, index, includeIntro = false) {
+    const beats = [];
+    const push = (text, selector = '', cue = '', pauseWeight = 0.25) => {
+      const clean = normalisedLectureText(text);
+      if (clean) beats.push({ text: clean, selector, cue, pauseWeight });
+    };
+
+    if (includeIntro) {
+      push(
+        `Welcome to this guided explanation of ${plan.title || 'the topic'}. ${plan.caption || ''}`,
+        '',
+        '',
+        0.55,
+      );
+    }
+
+    if (plan.kind === 'steps') {
+      const step = plan.steps?.[index] || {};
+      push(`Let us work through step ${index + 1}, ${step.title || 'the next stage'}.`, '[data-teach-section-block="title"]', '', 0.35);
+      lectureSentenceGroups(step.narration || step.explanation, 1).forEach(group => {
+        const first = group[0]?.sentenceIndex ?? 0;
+        push(
+          group.map(item => item.sentence).join(' '),
+          `[data-teach-section="explanation"][data-teach-sentence="${first}"]`,
+          '',
+          0.25,
+        );
+      });
+      if (step.equation) {
+        push('Now focus on the expression shown on the board. Notice what each symbol represents and how it connects to the step we have just discussed.', '[data-teach-section-block="equation"]', 'equation', 0.45);
+      }
+      if (step.learner_prompt) {
+        push(`Before we continue, think about this. ${step.learner_prompt}`, '[data-teach-section-block="learner-prompt"]', 'learner-prompt', 0.9);
+      }
+      return beats;
+    }
+
+    if (plan.kind === 'slides') {
+      const slide = plan.slides?.[index] || {};
+      push(`Let us now consider ${slide.title || `section ${index + 1}`}.`, '[data-teach-section-block="title"]', '', 0.35);
+
+      (slide.bullets || []).forEach((bullet, bulletIndex) => {
+        const lead = bulletIndex === 0 ? 'The first idea to keep in view is' : bulletIndex === (slide.bullets || []).length - 1 ? 'A final organising idea is' : 'Another important idea is';
+        push(`${lead} ${bullet}.`, `[data-teach-section="bullet-${bulletIndex}"][data-teach-sentence="0"]`, `bullet-${bulletIndex}`, 0.18);
+      });
+
+      slideDetailedTexts(slide).forEach(block => {
+        lectureSentenceGroups(block.text, 1).forEach(group => {
+          const first = group[0]?.sentenceIndex ?? 0;
+          push(
+            group.map(item => item.sentence).join(' '),
+            `[data-teach-section="${block.key}"][data-teach-sentence="${first}"]`,
+            block.key === 'speaker-note' ? 'speaker-note' : '',
+            0.24,
+          );
+        });
+      });
+
+      if (slide.equation) {
+        push(
+          'Now look at the equation or expression that has appeared on the slide. Read it together with the explanation, and pay attention to how each part supports the concept.',
+          '[data-teach-section-block="equation"]',
+          'equation',
+          0.48,
+        );
+      }
+
+      if (slide.worked_example) {
+        push('Let us apply the idea in a worked example.', '[data-teach-section-block="worked-example"]', 'worked-example', 0.25);
+        lectureSentenceGroups(slide.worked_example, 1).forEach(group => {
+          const first = group[0]?.sentenceIndex ?? 0;
+          push(
+            group.map(item => item.sentence).join(' '),
+            `[data-teach-section="worked-example"][data-teach-sentence="${first}"]`,
+            'worked-example',
+            0.32,
+          );
+        });
+      }
+
+      if ((slide.key_terms || []).length) {
+        push(
+          `Keep these terms in mind as you review the explanation: ${naturalList(slide.key_terms)}.`,
+          '[data-teach-section-block="key-terms"]',
+          'key-terms',
+          0.32,
+        );
+      }
+
+      if (slide.check_question) {
+        push(
+          `Before moving on, pause and consider this question. ${slide.check_question}`,
+          '[data-teach-section-block="check-question"]',
+          'check-question',
+          0.9,
+        );
+      }
+      return beats;
+    }
+
+    push(visualPlanToSpeech(plan), '', '', 0.3);
+    return beats;
+  }
+
+  function chunkLectureBeats(beats, maxCharacters = 3600) {
+    const chunks = [];
+    let current = [];
+    let length = 0;
+    beats.forEach(beat => {
+      const nextLength = beat.text.length + (current.length ? 1 : 0);
+      if (current.length && length + nextLength > maxCharacters) {
+        chunks.push(current);
+        current = [];
+        length = 0;
+      }
+      current.push(beat);
+      length += beat.text.length + (current.length > 1 ? 1 : 0);
+    });
+    if (current.length) chunks.push(current);
+    return chunks;
+  }
+
+  function prepareGuidedLectureDisplay() {
+    visualContent.classList.add('guided-lecture-active');
+    visualContent.classList.remove('lecture-has-cue');
+    visualContent.querySelectorAll('[data-lecture-cue]').forEach(node => {
+      node.classList.remove('lecture-revealed', 'lecture-current-cue');
+    });
+    visualContent.querySelectorAll('.teaching-sentence').forEach(node => {
+      node.classList.remove('lecture-spoken');
     });
   }
 
-  function highlightTeachingSegment(selector) {
+  function revealTeachingCue(cue) {
+    if (!cue) return;
+    visualContent.classList.add('lecture-has-cue');
+    visualContent.querySelectorAll(`[data-lecture-cue="${CSS.escape(cue)}"]`).forEach(node => {
+      node.classList.add('lecture-revealed');
+    });
+  }
+
+  function clearTeachingHighlight() {
+    visualContent.querySelectorAll('.teaching-current, .teaching-section-current, .lecture-current-cue').forEach(node => {
+      node.classList.remove('teaching-current', 'teaching-section-current', 'lecture-current-cue');
+    });
+  }
+
+  function highlightTeachingBeat(beat) {
     clearTeachingHighlight();
-    if (!selector) return;
-    const node = visualContent.querySelector(selector);
+    revealTeachingCue(beat?.cue || '');
+    if (!beat?.selector) return;
+    const node = visualContent.querySelector(beat.selector);
     if (!node) return;
-    node.classList.add('teaching-current');
-    node.closest('.teaching-section')?.classList.add('teaching-section-current');
+    node.classList.add('teaching-current', 'lecture-spoken');
+    const section = node.closest('.teaching-section');
+    section?.classList.add('teaching-section-current');
+    if (beat.cue) {
+      visualContent.querySelectorAll(`[data-lecture-cue="${CSS.escape(beat.cue)}"]`).forEach(cueNode => cueNode.classList.add('lecture-current-cue'));
+    }
     node.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
   }
 
@@ -246,7 +391,12 @@
     }
   }
 
-  async function speakAndWait(text, runId) {
+  function lectureBeatWeight(beat) {
+    const words = beat.text.split(/\s+/).filter(Boolean).length;
+    return Math.max(4, words) + Math.max(0, Number(beat.pauseWeight || 0)) * 5;
+  }
+
+  async function requestLectureAudio(text, runId) {
     if (!state.config?.openai_enabled) throw new Error('Voice output needs OPENAI_API_KEY to be configured.');
     await waitForTeachingResume(runId);
     state.teachingAbortController?.abort();
@@ -255,43 +405,93 @@
     const response = await fetch('/api/speech', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: String(text || '').slice(0, 3900), voice: el('voice').value }),
-      signal: controller.signal
+      body: JSON.stringify({
+        text: String(text || '').slice(0, 4050),
+        voice: el('voice').value,
+        style: 'guided_lecture',
+        speed: 0.94,
+      }),
+      signal: controller.signal,
     });
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       throw new Error(data.detail || 'Voice generation failed.');
     }
-    const blob = await response.blob();
-    if (runId !== state.teachingRunId) return;
+    return response.blob();
+  }
+
+  async function playLectureChunk(beats, runId, sectionLabel) {
+    const text = beats.map(beat => beat.text).join(' ');
+    const blob = await requestLectureAudio(text, runId);
+    if (runId !== state.teachingRunId || !state.teachingActive) return;
     if (state.lastAudioUrl) URL.revokeObjectURL(state.lastAudioUrl);
     state.lastAudioUrl = URL.createObjectURL(blob);
     audioPlayer.src = state.lastAudioUrl;
     audioPlayer.hidden = false;
+
     await new Promise((resolve, reject) => {
-      const finished = () => { cleanup(); resolve(); };
-      const failed = () => { cleanup(); reject(new Error('Audio playback failed.')); };
-      const pausedByTutor = () => {
-        if (state.teachingPaused) audioPlayer.pause();
+      let activeIndex = -1;
+      let monitor = null;
+      const weights = beats.map(lectureBeatWeight);
+      const totalWeight = Math.max(weights.reduce((sum, value) => sum + value, 0), 1);
+      const starts = [];
+      let running = 0;
+      weights.forEach(value => {
+        starts.push(running / totalWeight);
+        running += value;
+      });
+
+      const updateBeat = () => {
+        const duration = Number.isFinite(audioPlayer.duration) && audioPlayer.duration > 0
+          ? audioPlayer.duration
+          : Math.max(text.split(/\s+/).length / 2.45, 1);
+        const ratio = Math.max(0, Math.min(1, audioPlayer.currentTime / duration));
+        let nextIndex = 0;
+        for (let index = 0; index < starts.length; index += 1) {
+          if (ratio + 0.002 >= starts[index]) nextIndex = index;
+          else break;
+        }
+        if (nextIndex !== activeIndex) {
+          activeIndex = nextIndex;
+          highlightTeachingBeat(beats[activeIndex]);
+          setStatus(`${sectionLabel}, explaining part ${activeIndex + 1} of ${beats.length}…`);
+        }
       };
+
       const cleanup = () => {
+        if (monitor) clearInterval(monitor);
         audioPlayer.removeEventListener('ended', finished);
         audioPlayer.removeEventListener('error', failed);
+        audioPlayer.removeEventListener('loadedmetadata', updateBeat);
+        audioPlayer.removeEventListener('timeupdate', updateBeat);
       };
+      const finished = () => {
+        beats.forEach(beat => revealTeachingCue(beat.cue));
+        if (beats.length) highlightTeachingBeat(beats.at(-1));
+        cleanup();
+        resolve();
+      };
+      const failed = () => {
+        cleanup();
+        reject(new Error('Audio playback failed.'));
+      };
+
       audioPlayer.addEventListener('ended', finished, { once: true });
       audioPlayer.addEventListener('error', failed, { once: true });
-      audioPlayer.play().catch(failed);
-      const pauseWatcher = setInterval(async () => {
+      audioPlayer.addEventListener('loadedmetadata', updateBeat);
+      audioPlayer.addEventListener('timeupdate', updateBeat);
+      monitor = setInterval(() => {
         if (runId !== state.teachingRunId || !state.teachingActive) {
-          clearInterval(pauseWatcher);
           cleanup();
           resolve();
           return;
         }
-        if (state.teachingPaused && !audioPlayer.paused) pausedByTutor();
+        if (state.teachingPaused && !audioPlayer.paused) audioPlayer.pause();
         if (!state.teachingPaused && audioPlayer.paused && !audioPlayer.ended) audioPlayer.play().catch(() => {});
-        if (audioPlayer.ended) clearInterval(pauseWatcher);
-      }, 120);
+        updateBeat();
+      }, 100);
+      updateBeat();
+      audioPlayer.play().catch(failed);
     });
   }
 
@@ -299,7 +499,7 @@
     const plan = state.visualPlan;
     const count = visualPageCount(plan);
     if (!count) {
-      setStatus('Create a visual explanation before starting guided narration.');
+      setStatus('Create a visual explanation before starting guided teaching.');
       return;
     }
     stopStepTeaching(false);
@@ -311,29 +511,32 @@
     el('pauseTeaching').textContent = 'Ⅱ Pause';
     el('stopTeaching').classList.remove('hidden');
     visualViewport.classList.add('teaching-mode');
-    setStatus('Teaching the active section at a lecturer-like pace…');
+    setStatus('Preparing a guided lecture from the detailed notes…');
     try {
       for (let index = state.visualIndex; index < count; index += 1) {
         if (!state.teachingActive || runId !== state.teachingRunId) break;
         state.visualIndex = index;
         clearInk(false);
         renderCurrentVisual();
+        prepareGuidedLectureDisplay();
         visualContent.classList.add('teaching-focus');
-        const segments = visualTeachingSegments(plan, index, index === 0);
-        for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+        const beats = visualTeachingBeats(plan, index, index === 0);
+        const chunks = chunkLectureBeats(beats);
+        for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
           if (!state.teachingActive || runId !== state.teachingRunId) break;
           await waitForTeachingResume(runId);
-          const segment = segments[segmentIndex];
-          highlightTeachingSegment(segment.selector);
-          setStatus(`Teaching section ${index + 1} of ${count}, part ${segmentIndex + 1} of ${segments.length}…`);
-          await speakAndWait(segment.text, runId);
-          await pacedDelay(segment.pause, runId);
+          await playLectureChunk(
+            chunks[chunkIndex],
+            runId,
+            `Teaching section ${index + 1} of ${count}`,
+          );
+          await pacedDelay(chunkIndex < chunks.length - 1 ? 280 : 480, runId);
         }
         clearTeachingHighlight();
         visualContent.classList.remove('teaching-focus');
-        await pacedDelay(650, runId);
+        await pacedDelay(520, runId);
       }
-      if (state.teachingActive && runId === state.teachingRunId) setStatus('Detailed visual lesson complete.');
+      if (state.teachingActive && runId === state.teachingRunId) setStatus('Guided lecture complete. You may replay any section or continue with practice.');
     } catch (error) {
       if (error.name !== 'AbortError') setStatus(error.message);
     } finally {
@@ -364,7 +567,7 @@
     state.teachingAbortController = null;
     audioPlayer.pause();
     clearTeachingHighlight();
-    visualContent.classList.remove('teaching-focus');
+    visualContent.classList.remove('teaching-focus', 'guided-lecture-active', 'lecture-has-cue');
     visualViewport.classList.remove('teaching-mode');
     el('teachVisual').classList.remove('hidden');
     el('pauseTeaching')?.classList.add('hidden');

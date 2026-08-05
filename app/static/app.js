@@ -803,19 +803,86 @@ function renderImageAnnotation(plan) {
 
 function renderSlide(plan) {
   const slide = (plan.slides || [])[state.visualIndex] || { title: plan.title || 'Lesson', bullets: [], equation: '', explanation: '', worked_example: '', key_terms: [], check_question: '', speaker_note: '' };
-  const bullets = (slide.bullets || []).map((item, index) => `<li class="teaching-section" data-teach-section-block="bullet-${index}">${teachingSentenceMarkup(item, `bullet-${index}`)}</li>`).join('');
-  const equation = slide.equation ? `<div class="slide-equation teaching-section" data-teach-section-block="equation">\[${escapeHtml(slide.equation)}\]</div>` : '';
-  const explanation = slide.explanation ? `<div class="slide-explanation teaching-section" data-teach-section-block="explanation"><h4>Detailed explanation</h4><p>${teachingSentenceMarkup(slide.explanation, 'explanation')}</p></div>` : '';
-  const example = slide.worked_example ? `<div class="slide-example teaching-section" data-teach-section-block="worked-example"><h4>Worked example or application</h4><p>${teachingSentenceMarkup(slide.worked_example, 'worked-example')}</p></div>` : '';
-  const terms = (slide.key_terms || []).length ? `<div class="slide-key-terms teaching-section" data-teach-section-block="key-terms"><strong>Key terms</strong>${slide.key_terms.map((item, index) => `<span data-teach-term="${index}">${escapeHtml(item)}</span>`).join('')}</div>` : '';
-  const check = slide.check_question ? `<div class="slide-check teaching-section" data-teach-section-block="check-question"><strong>Check your understanding</strong><p>${teachingSentenceMarkup(slide.check_question, 'check-question')}</p></div>` : '';
-  const note = slide.speaker_note ? `<div class="slide-note slide-teaching-note teaching-section" data-teach-section-block="speaker-note"><h4>Lecturer-style explanation</h4><p>${teachingSentenceMarkup(slide.speaker_note, 'speaker-note')}</p></div>` : '';
+  const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
+  const explanation = clean(slide.explanation);
+  const speakerNote = clean(slide.speaker_note);
+  const noteBlocks = [];
+  if (explanation && speakerNote) {
+    const explanationLower = explanation.toLowerCase();
+    const speakerLower = speakerNote.toLowerCase();
+    if (explanationLower.includes(speakerLower)) {
+      noteBlocks.push({ key: 'explanation', title: 'Detailed teaching notes', text: explanation });
+    } else if (speakerLower.includes(explanationLower)) {
+      noteBlocks.push({ key: 'speaker-note', title: 'Detailed teaching notes', text: speakerNote });
+    } else {
+      noteBlocks.push({ key: 'explanation', title: 'Detailed teaching notes', text: explanation });
+      noteBlocks.push({ key: 'speaker-note', title: 'Lecturer explanation', text: speakerNote });
+    }
+  } else if (explanation) {
+    noteBlocks.push({ key: 'explanation', title: 'Detailed teaching notes', text: explanation });
+  } else if (speakerNote) {
+    noteBlocks.push({ key: 'speaker-note', title: 'Detailed teaching notes', text: speakerNote });
+  }
+  if (!noteBlocks.length && (slide.bullets || []).length) {
+    noteBlocks.push({ key: 'explanation', title: 'Detailed teaching notes', text: (slide.bullets || []).join('. ') });
+  }
+
+  const transcript = noteBlocks.map(block => `
+    <section class="lecture-note-block teaching-section" data-teach-section-block="${escapeHtml(block.key)}">
+      <h4>${escapeHtml(block.title)}</h4>
+      <p>${teachingSentenceMarkup(block.text, block.key)}</p>
+    </section>`).join('');
+
+  const bulletCards = (slide.bullets || []).map((item, index) => `
+    <article class="lecture-popup lecture-concept-card teaching-section" data-lecture-cue="bullet-${index}" data-teach-section-block="bullet-${index}">
+      <span class="lecture-popup-label">Key idea ${index + 1}</span>
+      <p>${teachingSentenceMarkup(item, `bullet-${index}`)}</p>
+    </article>`).join('');
+
+  const equation = slide.equation ? `
+    <article class="lecture-popup lecture-equation-card teaching-section" data-lecture-cue="equation" data-teach-section-block="equation">
+      <span class="lecture-popup-label">On the board</span>
+      <div class="slide-equation">\[${escapeHtml(slide.equation)}\]</div>
+    </article>` : '';
+
+  const example = slide.worked_example ? `
+    <article class="lecture-popup lecture-example-card teaching-section" data-lecture-cue="worked-example" data-teach-section-block="worked-example">
+      <span class="lecture-popup-label">Worked example or application</span>
+      <p>${teachingSentenceMarkup(slide.worked_example, 'worked-example')}</p>
+    </article>` : '';
+
+  const terms = (slide.key_terms || []).length ? `
+    <article class="lecture-popup lecture-terms-card teaching-section" data-lecture-cue="key-terms" data-teach-section-block="key-terms">
+      <span class="lecture-popup-label">Key terms</span>
+      <div class="slide-key-terms">${slide.key_terms.map((item, index) => `<span data-teach-term="${index}">${escapeHtml(item)}</span>`).join('')}</div>
+    </article>` : '';
+
+  const check = slide.check_question ? `
+    <article class="lecture-popup lecture-check-card teaching-section" data-lecture-cue="check-question" data-teach-section-block="check-question">
+      <span class="lecture-popup-label">Pause and check your understanding</span>
+      <p>${teachingSentenceMarkup(slide.check_question, 'check-question')}</p>
+    </article>` : '';
+
+  const speakerCue = speakerNote && noteBlocks.some(block => block.key === 'speaker-note') ? `
+    <div class="lecture-popup lecture-transition-card teaching-section" data-lecture-cue="speaker-note" aria-hidden="true">
+      <span class="lecture-popup-label">The explanation is continuing</span>
+    </div>` : '';
+
   visualContent.innerHTML = `
-    <div class="lesson-slide detailed-slide">
-      <span class="slide-number">Detailed lesson section ${state.visualIndex + 1}</span>
-      <h3 class="teaching-section" data-teach-section-block="title">${escapeHtml(slide.title)}</h3>
-      ${bullets ? `<ul class="slide-bullets">${bullets}</ul>` : ''}
-      ${equation}${explanation}${example}${terms}${check}${note}
+    <div class="lesson-slide detailed-slide guided-lecture-slide">
+      <header class="lecture-slide-header">
+        <span class="slide-number">Lesson section ${state.visualIndex + 1}</span>
+        <h3 class="teaching-section" data-teach-section-block="title">${escapeHtml(slide.title)}</h3>
+      </header>
+      <div class="guided-lecture-layout">
+        <div class="lecture-notes-panel" aria-label="Detailed teaching notes">
+          ${transcript || '<p class="small-note">The detailed explanation will be presented here.</p>'}
+        </div>
+        <aside class="lecture-visual-stage" aria-label="Teaching points that appear during the explanation">
+          <div class="lecture-stage-placeholder">Important ideas, examples and equations will appear here as the tutor explains them.</div>
+          ${bulletCards}${equation}${example}${terms}${check}${speakerCue}
+        </aside>
+      </div>
     </div>`;
 }
 

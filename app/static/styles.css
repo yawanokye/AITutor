@@ -763,3 +763,157 @@ body.student-interface #dashboardOpen { font-weight: 800; }
 @media (prefers-reduced-motion: reduce) {
   .teaching-section, .teaching-sentence { transition: none; }
 }
+
+/* v5.3 guided lecture: detailed notes lead, teaching cues appear in sync */
+.guided-lecture-slide {
+  min-height: 100%;
+}
+.lecture-slide-header {
+  margin-bottom: 1rem;
+}
+.guided-lecture-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(260px, .8fr);
+  gap: 1rem;
+  align-items: start;
+}
+.lecture-notes-panel,
+.lecture-visual-stage {
+  min-width: 0;
+  border-radius: 18px;
+  border: 1px solid rgba(32, 91, 75, .14);
+  background: rgba(255, 255, 255, .92);
+}
+.lecture-notes-panel {
+  padding: 1rem 1.05rem;
+  max-height: min(66vh, 760px);
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+.lecture-note-block + .lecture-note-block {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(32, 91, 75, .12);
+}
+.lecture-note-block h4 {
+  margin: 0 0 .55rem;
+  color: #173d34;
+  font-size: .92rem;
+  letter-spacing: .02em;
+}
+.lecture-note-block p {
+  margin: 0;
+  line-height: 1.78;
+  font-size: 1.02rem;
+}
+.lecture-visual-stage {
+  position: sticky;
+  top: .5rem;
+  padding: .85rem;
+  min-height: 300px;
+  max-height: min(66vh, 760px);
+  overflow-y: auto;
+  display: grid;
+  gap: .75rem;
+  align-content: start;
+}
+.lecture-stage-placeholder {
+  padding: 1rem;
+  border-radius: 14px;
+  border: 1px dashed rgba(32, 91, 75, .25);
+  color: #667a74;
+  background: rgba(239, 247, 244, .72);
+  line-height: 1.55;
+}
+.lecture-has-cue .lecture-stage-placeholder {
+  display: none;
+}
+.lecture-popup {
+  padding: .9rem 1rem;
+  border-radius: 15px;
+  border: 1px solid rgba(32, 91, 75, .18);
+  background: #fff;
+  box-shadow: 0 8px 22px rgba(26, 69, 58, .08);
+}
+.lecture-popup-label {
+  display: block;
+  margin-bottom: .42rem;
+  color: #1f6553;
+  font-size: .78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .045em;
+}
+.lecture-popup p {
+  margin: 0;
+  line-height: 1.6;
+}
+.lecture-equation-card { background: #f5f8ff; }
+.lecture-example-card { background: #f5fbf7; }
+.lecture-check-card { background: #fff9e8; }
+.lecture-terms-card { background: #f8f5ff; }
+.lecture-transition-card {
+  min-height: 0;
+  padding: .45rem .75rem;
+  color: #60736d;
+  background: #f4f8f6;
+}
+.guided-lecture-active .lecture-popup {
+  opacity: 0;
+  transform: translateY(14px) scale(.985);
+  max-height: 0;
+  overflow: hidden;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin: 0;
+  border-width: 0;
+  pointer-events: none;
+  transition: opacity .4s ease, transform .4s ease, max-height .45s ease, padding .35s ease, border-width .35s ease;
+}
+.guided-lecture-active .lecture-popup.lecture-revealed {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  max-height: 520px;
+  padding: .9rem 1rem;
+  border-width: 1px;
+  pointer-events: auto;
+}
+.guided-lecture-active .lecture-popup.lecture-current-cue {
+  box-shadow: 0 0 0 3px rgba(212, 160, 31, .22), 0 12px 28px rgba(26, 69, 58, .12);
+}
+.guided-lecture-active .lecture-notes-panel .teaching-sentence {
+  opacity: .38;
+  transition: opacity .25s ease, background-color .2s ease, color .2s ease, box-shadow .2s ease;
+}
+.guided-lecture-active .lecture-notes-panel .teaching-sentence.lecture-spoken {
+  opacity: .86;
+}
+.guided-lecture-active .lecture-notes-panel .teaching-sentence.teaching-current {
+  opacity: 1;
+}
+.visual-viewport.teaching-mode .guided-lecture-slide .teaching-section {
+  opacity: 1;
+}
+.visual-viewport.teaching-mode .lecture-note-block.teaching-section-current {
+  background: rgba(255, 248, 214, .48);
+  box-shadow: 0 0 0 3px rgba(201, 157, 31, .12);
+}
+@media (max-width: 900px) {
+  .guided-lecture-layout {
+    grid-template-columns: 1fr;
+  }
+  .lecture-visual-stage {
+    position: relative;
+    top: auto;
+    max-height: none;
+  }
+  .lecture-notes-panel {
+    max-height: 52vh;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .guided-lecture-active .lecture-popup,
+  .guided-lecture-active .lecture-notes-panel .teaching-sentence {
+    transition: none;
+  }
+}
