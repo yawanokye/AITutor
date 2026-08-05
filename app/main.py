@@ -79,7 +79,7 @@ logger = logging.getLogger("ai_tutor")
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title=settings.app_name, version="5.2.0")
+app = FastAPI(title=settings.app_name, version="5.3.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -636,6 +636,9 @@ async def health() -> dict[str, Any]:
         "cropped_practice_whiteboard_capture_enabled": True,
         "partial_practice_credit_enabled": True,
         "paced_section_teaching_enabled": True,
+        "guided_lecture_notes_enabled": True,
+        "synchronised_slide_popups_enabled": True,
+        "natural_lecture_pacing_enabled": True,
     }
 
 
@@ -1474,9 +1477,21 @@ async def speech(request: Request, payload: SpeechRequest) -> Response:
             "voice": voice,
             "input": speech_text,
             "response_format": "mp3",
+            "speed": payload.speed,
         }
         if settings.tts_model.startswith("gpt-4o-mini-tts"):
-            kwargs["instructions"] = "Speak as a calm, warm and patient tutor at a moderate pace."
+            if payload.style == "guided_lecture":
+                kwargs["instructions"] = (
+                    "Speak like an experienced university lecturer teaching a real class. "
+                    "Use a warm, conversational British-English delivery with natural variation in pace and emphasis. "
+                    "Do not sound like you are reading bullet points. Connect ideas smoothly. "
+                    "Pause briefly after an important definition, before a worked example, and before a check question. "
+                    "Slow down slightly for equations, technical terms and multi-step reasoning. "
+                    "Use gentle transitions such as 'now', 'for example' and 'notice that' only where they fit naturally. "
+                    "Avoid exaggerated enthusiasm, robotic rhythm, or equal pauses after every sentence."
+                )
+            else:
+                kwargs["instructions"] = "Speak as a calm, warm and patient tutor at a moderate pace."
         result = openai_client.audio.speech.create(**kwargs)
         return result.read()
 

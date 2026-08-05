@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field, field_validator
 class SpeechRequest(BaseModel):
     text: str = Field(min_length=1, max_length=4096)
     voice: str = Field(default="nova", min_length=2, max_length=32)
+    style: Literal["default", "guided_lecture"] = "default"
+    speed: float = Field(default=1.0, ge=0.75, le=1.15)
 
 
 class VisualStep(BaseModel):
