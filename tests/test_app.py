@@ -22,10 +22,11 @@ from app.main import (
     _base_media_type,
     _extract_response_text,
     _normalise_visual_plan,
+    _normalise_practice_evaluation,
     app,
     knowledge,
 )
-from app.schemas import VisualPlan
+from app.schemas import PracticeEvaluation, VisualPlan
 from app.knowledge import make_chunks
 
 
@@ -158,7 +159,7 @@ def test_health_reports_v5_portal_build():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["version"] == "5.1.1"
+    assert data["version"] == "5.2.0"
     assert data["live_video_enabled"] is False
     assert data["institutional_mode"] is True
     assert data["course_lock_enabled"] is True
@@ -183,8 +184,8 @@ def test_index_contains_v5_role_portals_and_two_whiteboards():
         'id="openDashboard"', 'id="classSelect"', 'id="outcomeSelect"', 'id="weekSelect"',
     ):
         assert identifier in html
-    assert '/static/portal.js?v=5.1.1' in html
-    assert '/static/practice_board.js?v=5.1.1' in html
+    assert '/static/portal.js?v=5.2.0' in html
+    assert '/static/practice_board.js?v=5.2.0' in html
     assert 'Administrator sign in' in html
     assert 'Lecturer sign in' in html
     assert 'Student sign in' in html
@@ -382,6 +383,49 @@ def test_required_practice_whiteboard_accepts_image_response():
         files={"board_image": ("practice.png", ONE_PIXEL_PNG, "image/png")},
     )
     assert response.status_code == 200
+    data = response.json()
+    assert data["completed"] is False
+    assert data["question_score"] > 0
+    assert data["response_received"] is True
+
+
+def test_inconsistent_zero_score_cannot_complete_practice():
+    evaluation = _normalise_practice_evaluation(
+        PracticeEvaluation(correct=True, score=0, feedback="No markable response received")
+    )
+    assert evaluation.correct is False
+    assert evaluation.score == 0
+
+
+def test_partial_score_is_preserved_for_typed_practice_attempt():
+    lecturer, _ = lecturer_account()
+    classroom = create_course(lecturer, name="Partial Credit Practice", response_mode="typed")
+    student = student_account()
+    enrol(student, classroom)
+    start = client.post(
+        "/api/practice/start",
+        headers=headers(student),
+        data={"topic": "Mean", "level": "University", "course": "STA 101", "class_id": classroom["id"], "question_count": "2"},
+    ).json()
+    response = client.post(
+        "/api/practice/check",
+        headers=headers(student),
+        data={"practice_id": start["practice_id"], "answer": "I have started by identifying the values."},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["completed"] is False
+    assert data["question_score"] == 35
+    assert data["total_score"] > 0
+
+
+def test_index_exposes_pause_control_and_capture_status():
+    html = client.get("/").text
+    assert 'id="pauseTeaching"' in html
+    assert 'id="practiceCaptureStatus"' in html
+    assert '/static/v2_1.js?v=5.2.0' in html
+    assert '/static/practice_board.js?v=5.2.0' in html
+
 
 
 def test_demo_chat_returns_visual_plan():
@@ -608,7 +652,7 @@ def test_service_worker_and_manifest_are_v5():
     assert manifest.status_code == 200
     assert worker.status_code == 200
     assert "Anovlad Institutional AI Tutor" in manifest.text
-    assert "anovlad-ai-tutor-v5-1-1-shell" in worker.text
+    assert "anovlad-ai-tutor-v5-2-0-shell" in worker.text
 
 
 def test_cost_aware_router_prefers_flash_for_normal_and_pro_for_advanced():
@@ -651,7 +695,7 @@ def test_v51_student_workspace_controls_are_present():
         'id="practiceFullscreen"', 'id="fullscreenBoard"',
     ):
         assert identifier in html
-    assert '/static/v2_1.js?v=5.1.1' in html
+    assert '/static/v2_1.js?v=5.2.0' in html
     css = client.get('/static/styles.css').text
     assert 'body.student-interface' in css
     assert '.practice-whiteboard-wrap:fullscreen' in css
