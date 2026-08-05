@@ -187,6 +187,8 @@ class PracticeCheckResponse(BaseModel):
     correct: bool
     score_awarded: int
     total_score: int
+    question_score: int = Field(default=0, ge=0, le=100)
+    response_received: bool = True
     feedback: str
     hint: str = ""
     attempts: int

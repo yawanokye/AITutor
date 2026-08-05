@@ -79,7 +79,7 @@ logger = logging.getLogger("ai_tutor")
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title=settings.app_name, version="5.1.1")
+app = FastAPI(title=settings.app_name, version="5.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -633,6 +633,9 @@ async def health() -> dict[str, Any]:
         "scrolling_fullscreen_whiteboards_enabled": True,
         "weekly_course_plan_enabled": True,
         "period_table_outline_parser_enabled": True,
+        "cropped_practice_whiteboard_capture_enabled": True,
+        "partial_practice_credit_enabled": True,
+        "paced_section_teaching_enabled": True,
     }
 
 
@@ -1035,6 +1038,7 @@ async def start_practice(
         "activity": activity,
         "index": 0,
         "attempts": {},
+        "best_scores": {},
         "total_score": 0,
         "created_at": time.time(),
         "user_id": str(user["id"]) if user else "",
@@ -1066,11 +1070,41 @@ async def start_practice(
     return _practice_public_question(practice_id, practice_sessions[practice_id])
 
 
+def _normalise_practice_evaluation(evaluation: PracticeEvaluation) -> PracticeEvaluation:
+    """Make mastery depend on the awarded score, not an inconsistent model boolean."""
+    score = max(0, min(100, int(evaluation.score or 0)))
+    correct = score >= 70
+    feedback = (evaluation.feedback or "").strip()
+    if not feedback:
+        feedback = "Your response has been assessed. Review the hint and improve the next step." if not correct else "Your response demonstrates the required understanding."
+    return evaluation.model_copy(update={"score": score, "correct": correct, "feedback": feedback})
+
+
+def _practice_total_score(state: dict[str, Any], question_count: int) -> int:
+    best_scores = state.setdefault("best_scores", {})
+    if question_count <= 0:
+        return 0
+    return max(0, min(100, int(round(sum(int(value or 0) for value in best_scores.values()) / question_count))))
+
+
+def _looks_like_unreadable_feedback(evaluation: PracticeEvaluation) -> bool:
+    text = f"{evaluation.feedback} {evaluation.misconception} {evaluation.next_hint}".lower()
+    phrases = (
+        "no markable response", "no response received", "blank image", "nothing visible",
+        "no visible response", "cannot see any", "could not identify any writing",
+    )
+    return evaluation.score <= 5 and any(phrase in text for phrase in phrases)
+
+
 @app.post("/api/practice/check", response_model=PracticeCheckResponse)
 async def check_practice_answer(
     request: Request,
     practice_id: str = Form(...),
     answer: str = Form(default=""),
+    board_stroke_count: int = Form(default=0),
+    board_capture_width: int = Form(default=0),
+    board_capture_height: int = Form(default=0),
+    board_ink_coverage: float = Form(default=0.0),
     board_image: UploadFile | None = File(default=None),
     audio_response: UploadFile | None = File(default=None),
 ) -> PracticeCheckResponse:
@@ -1082,10 +1116,17 @@ async def check_practice_answer(
     activity: PracticeActivity = state["activity"]
     index = int(state["index"])
     if index >= len(activity.questions):
-        return PracticeCheckResponse(correct=True, score_awarded=0, total_score=int(state.get("total_score", 0)), feedback="Practice is already complete.", attempts=0, completed=True)
+        return PracticeCheckResponse(
+            correct=True, score_awarded=0, total_score=int(state.get("total_score", 0)), question_score=100,
+            feedback="Practice is already complete.", attempts=0, completed=True
+        )
     question = activity.questions[index]
     answer = answer.strip()
-    board = await _read_image(board_image, label="Learner's practice working on the practice whiteboard")
+    board = await _read_image(board_image, label="Learner's cropped handwritten practice response")
+    board_stroke_count = max(0, min(int(board_stroke_count or 0), 10000))
+    board_capture_width = max(0, min(int(board_capture_width or 0), 5000))
+    board_capture_height = max(0, min(int(board_capture_height or 0), 5000))
+    board_ink_coverage = max(0.0, min(float(board_ink_coverage or 0.0), 1.0))
     voice_transcript = ""
     if audio_response is not None:
         voice_transcript = await _transcribe_audio_upload(audio_response)
@@ -1103,34 +1144,97 @@ async def check_practice_answer(
         combined_answer = f"{answer}\n\nVOICE RESPONSE TRANSCRIPT\n{voice_transcript}".strip()
     attempts = int(state["attempts"].get(question.id, 0)) + 1
     state["attempts"][question.id] = attempts
+    board_capture_note = (
+        f"The browser confirmed {board_stroke_count} handwritten pen strokes in a cropped {board_capture_width} by {board_capture_height} pixel image "
+        f"with estimated ink coverage {board_ink_coverage:.5f}. Assess all visible partial working and do not treat an incomplete answer as an absent answer."
+        if board else "No whiteboard image was supplied."
+    )
     marking_text = (
         f"QUESTION\n{question.prompt}\n\nEXPECTED ANSWER\n{question.expected_answer}\n\n"
         f"ACCEPTED VARIANTS\n{'; '.join(question.accepted_variants)}\n\n"
-        f"MARKING GUIDE\n{question.marking_guide}\n\nREQUIRED RESPONSE MODE\n{response_mode}\n\nLEARNER ANSWER\n{combined_answer or '[supplied as whiteboard image]'}"
+        f"MARKING GUIDE\n{question.marking_guide}\n\nREQUIRED RESPONSE MODE\n{response_mode}\n\n"
+        f"WHITEBOARD CAPTURE INFORMATION\n{board_capture_note}\n\n"
+        f"LEARNER ANSWER\n{combined_answer or '[supplied as cropped whiteboard image]'}"
     )
     if settings.demo_mode:
         normalised_answer = re.sub(r"\s+", " ", combined_answer.lower()).strip()
         terms = [t for t in re.findall(r"[a-zA-Z]{4,}", question.expected_answer.lower()) if t not in {"clear", "correct", "answer", "explanation"}]
         overlap = sum(term in normalised_answer for term in terms[:8])
-        correct = bool(normalised_answer) and overlap >= max(1, min(2, len(terms)))
-        evaluation = PracticeEvaluation(correct=correct, score=80 if correct else 35, feedback="Your answer captures the main idea." if correct else "Your answer needs a clearer link to the key idea.", next_hint="" if correct else question.hint)
+        if board and not normalised_answer:
+            evaluation = PracticeEvaluation(
+                correct=False, score=45,
+                feedback="Your handwritten response was captured. In live mode, the tutor will award marks for each visible correct step.",
+                next_hint=question.hint,
+            )
+        else:
+            correct = bool(normalised_answer) and overlap >= max(1, min(2, len(terms)))
+            evaluation = PracticeEvaluation(
+                correct=correct, score=80 if correct else 35,
+                feedback="Your answer captures the main idea." if correct else "Your response shows some progress but needs a clearer link to the key idea.",
+                next_hint="" if correct else question.hint,
+            )
     else:
         try:
             if board:
-                result = await run_in_threadpool(ai_router.openai_parse_with_images, schema=PracticeEvaluation, instructions=practice_marking_instructions(level="learner"), text=marking_text, images=[board], max_tokens=1800)
+                result = await run_in_threadpool(
+                    ai_router.openai_parse_with_images,
+                    schema=PracticeEvaluation,
+                    instructions=practice_marking_instructions(level="learner"),
+                    text=marking_text,
+                    images=[board],
+                    max_tokens=1800,
+                )
             else:
                 _require_text_ai()
-                result = await run_in_threadpool(ai_router.generate_structured, schema=PracticeEvaluation, instructions=practice_marking_instructions(level="learner"), prompt=marking_text, task="practice_marking", max_tokens=1800, prefer_deepseek=True)
+                result = await run_in_threadpool(
+                    ai_router.generate_structured,
+                    schema=PracticeEvaluation,
+                    instructions=practice_marking_instructions(level="learner"),
+                    prompt=marking_text,
+                    task="practice_marking",
+                    max_tokens=1800,
+                    prefer_deepseek=True,
+                )
             evaluation = result.value if isinstance(result.value, PracticeEvaluation) else PracticeEvaluation.model_validate(result.value)
             _record_usage(user, result, "practice_marking")
+            evaluation = _normalise_practice_evaluation(evaluation)
+            if board and board_stroke_count > 0 and _looks_like_unreadable_feedback(evaluation):
+                retry_text = marking_text + (
+                    "\n\nSECOND INSPECTION REQUIRED\nThe client has verified that the cropped image contains handwriting. "
+                    "Zoom in, inspect every visible line, and award partial credit for any readable correct setup, definition, formula, substitution or reasoning. "
+                    "Do not mark the response complete unless the score reaches the mastery threshold."
+                )
+                retry = await run_in_threadpool(
+                    ai_router.openai_parse_with_images,
+                    schema=PracticeEvaluation,
+                    instructions=practice_marking_instructions(level="learner"),
+                    text=retry_text,
+                    images=[board],
+                    max_tokens=1800,
+                )
+                _record_usage(user, retry, "practice_marking_retry")
+                evaluation = retry.value if isinstance(retry.value, PracticeEvaluation) else PracticeEvaluation.model_validate(retry.value)
+                evaluation = _normalise_practice_evaluation(evaluation)
+                if _looks_like_unreadable_feedback(evaluation):
+                    evaluation = evaluation.model_copy(update={
+                        "correct": False,
+                        "score": 0,
+                        "feedback": "Your handwriting was captured, but the tutor could not read enough of it reliably. Keep this attempt open, use a dark pen, write larger, and submit again.",
+                        "next_hint": "Write one complete step per line and leave space between symbols or words.",
+                    })
         except Exception as exc:
             logger.exception("Practice marking failed")
             raise HTTPException(status_code=502, detail=f"Practice marking error: {type(exc).__name__}") from exc
-    score_awarded = int(round(evaluation.score / len(activity.questions)))
+
+    evaluation = _normalise_practice_evaluation(evaluation)
+    best_scores = state.setdefault("best_scores", {})
+    previous_best = int(best_scores.get(question.id, 0) or 0)
+    best_scores[question.id] = max(previous_best, int(evaluation.score))
+    state["total_score"] = _practice_total_score(state, len(activity.questions))
+    score_awarded = max(0, int(evaluation.score) - previous_best)
     next_question = None
     completed = False
     if evaluation.correct:
-        state["total_score"] = min(100, int(state.get("total_score", 0)) + score_awarded)
         state["index"] = index + 1
         completed = state["index"] >= len(activity.questions)
         if not completed:
@@ -1139,7 +1243,10 @@ async def check_practice_answer(
         try:
             event_meta = {
                 "correct": evaluation.correct, "attempts": attempts, "question_id": question.id,
-                "used_whiteboard": bool(board), "used_voice": bool(voice_transcript), "response_mode": response_mode, "misconception": evaluation.misconception,
+                "used_whiteboard": bool(board), "used_voice": bool(voice_transcript), "response_mode": response_mode,
+                "misconception": evaluation.misconception, "question_score": int(evaluation.score),
+                "board_stroke_count": board_stroke_count, "board_capture_width": board_capture_width,
+                "board_capture_height": board_capture_height, "board_ink_coverage": board_ink_coverage,
                 "learning_outcome": state.get("learning_outcome", ""),
                 "weekly_topic": state.get("weekly_topic", ""),
             }
@@ -1161,7 +1268,18 @@ async def check_practice_answer(
                 )
         except Exception:
             logger.exception("Practice progress could not be recorded")
-    return PracticeCheckResponse(correct=evaluation.correct, score_awarded=score_awarded if evaluation.correct else 0, total_score=int(state.get("total_score", 0)), feedback=evaluation.feedback, hint=evaluation.next_hint or (question.hint if not evaluation.correct else ""), attempts=attempts, completed=completed, next_question=next_question)
+    return PracticeCheckResponse(
+        correct=evaluation.correct,
+        score_awarded=score_awarded,
+        total_score=int(state.get("total_score", 0)),
+        question_score=int(evaluation.score),
+        response_received=bool(answer or board or voice_transcript),
+        feedback=evaluation.feedback,
+        hint=evaluation.next_hint or (question.hint if not evaluation.correct else ""),
+        attempts=attempts,
+        completed=completed,
+        next_question=next_question,
+    )
 
 
 @app.post("/api/practice/reveal", response_model=PracticeRevealResponse)

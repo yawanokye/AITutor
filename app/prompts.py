@@ -146,7 +146,9 @@ def practice_marking_instructions(*, level: str) -> str:
     return f"""
 Assess a learner's answer at {level} level against the supplied expected answer and marking guide.
 Be fair about equivalent wording, rounding and valid alternative methods.
-Return a score from 0 to 100 for this question. Set correct=true when the answer demonstrates the required understanding, normally at 70 or above.
+Award partial credit for every correct visible step, definition, formula, substitution, explanation or conclusion. An unfinished answer is still markable and must not be treated as an absent answer.
+For a handwritten image, inspect the cropped writing closely and read each visible line in order. If the capture information confirms pen strokes, do not report “no markable response” merely because the work is incomplete. State exactly what is readable and what remains unclear.
+Return a score from 0 to 100 for this question. Set correct=true only when the score is 70 or above. Never set correct=true with a score below 70.
 Give brief, constructive feedback. Identify one misconception only when present. Give a next hint without revealing the complete answer unless the learner has already shown most of the method.
 Use British English.
 """.strip()
