@@ -1,8 +1,15 @@
-# Anovlad Institutional AI Tutor v5.1
+# Anovlad Institutional AI Tutor v5.1.1
 
 A Render-ready, role-based AI learning platform for institutions. Administration, teaching and learning use dedicated portals, while lecturer-approved course documents become a structured, selectable AI tutoring environment.
 
 Version 5.1 provides a simpler course-first student interface, lecturer-controlled typed, voice or handwritten practice responses, vertically expandable full-screen whiteboards, week-by-week course-outline activities, outcome-generated teaching notes when readings are absent, and detailed visual teaching that matches the written notes. It retains the document ownership and deletion safeguards introduced in v5.0.3.
+
+
+## v5.1.1 course-outline table correction
+
+Version 5.1.1 corrects Word course outlines that place the teaching schedule in a table headed **Period**, **Topics**, and **Student’s Preparation**. The parser now preserves each paragraph inside table cells, converts number words such as One–Twenty into Week 1–20, creates selectable week topics and subtopics, extracts preparation activities, reads the course title from the course-information table, and combines course objectives with expected outcomes.
+
+Outlines uploaded before v5.1.1 do not contain the original Word file bytes in the database. After deploying this release, the lecturer must re-upload each affected outline once. Uploading the same filename and category replaces the old parsed structure and indexed text.
 
 ## v5.1 student learning workspace
 
@@ -203,7 +210,7 @@ This release uses the existing Render PostgreSQL database. It does not create a 
 6. Add or confirm the environment variables below.
 7. Select **Manual Deploy**, then **Clear build cache and deploy**.
 8. Wait until the service is Live.
-9. Open `/health` and confirm version `5.1.0`.
+9. Open `/health` and confirm version `5.1.1`.
 10. Refresh the browser with `Ctrl + Shift + R`.
 
 Expected health fields include:
@@ -211,7 +218,7 @@ Expected health fields include:
 ```json
 {
   "status": "ok",
-  "version": "5.1.0",
+  "version": "5.1.1",
   "administrator_portal_enabled": true,
   "lecturer_managed_enrolment": true,
   "structured_course_content_enabled": true,

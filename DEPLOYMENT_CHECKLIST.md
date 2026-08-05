@@ -76,7 +76,7 @@ Choose one method only.
 - [ ] Select **Clear build cache and deploy**.
 - [ ] Wait for the status to become **Live**.
 - [ ] Open `/health`.
-- [ ] Confirm `version` is `5.1.0`.
+- [ ] Confirm `version` is `5.1.1`.
 - [ ] Confirm the five new capability flags are `true`.
 - [ ] Refresh the browser with `Ctrl + Shift + R`.
 
@@ -155,7 +155,7 @@ Choose one method only.
 - [ ] Upload a document to Lecturer A's course and confirm Lecturer B cannot see it.
 - [ ] Delete a lecturer course document and confirm it disappears from both the course tree and course-material list.
 - [ ] Ask a question containing a unique phrase from the deleted document and confirm the source is no longer retrieved.
-- [ ] Confirm `/health` reports version `5.1.0`.
+- [ ] Confirm `/health` reports version `5.1.1`.
 
 ## v5.1 functional verification
 
@@ -171,3 +171,13 @@ Choose one method only.
 - [ ] A course with objectives and outcomes but no reading upload still produces a detailed lesson.
 - [ ] Detailed whiteboard slides show explanations and teaching notes at the same depth as the written lesson.
 
+
+
+## v5.1.1 course-outline restructuring
+
+- [ ] Deploy with **Clear build cache and deploy**.
+- [ ] Confirm `/health` reports `5.1.1` and `period_table_outline_parser_enabled: true`.
+- [ ] Sign out, hard-refresh the browser, and sign in again.
+- [ ] For every outline uploaded before v5.1.1 that shows “Complete document”, ask the lecturer to re-upload the same DOCX once as **Detailed course outline**.
+- [ ] Open the course as a student and confirm the week-by-week cards display topics, subtopics, and preparation activities.
+- [ ] Confirm selecting a subtopic starts the lesson for that exact subtopic.
