@@ -26,7 +26,7 @@ from app.main import (
     app,
     knowledge,
 )
-from app.schemas import PracticeEvaluation, VisualPlan
+from app.schemas import PracticeEvaluation, SpeechRequest, VisualPlan
 from app.knowledge import make_chunks
 
 
@@ -159,7 +159,7 @@ def test_health_reports_v5_portal_build():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["version"] == "5.2.0"
+    assert data["version"] == "5.3.0"
     assert data["live_video_enabled"] is False
     assert data["institutional_mode"] is True
     assert data["course_lock_enabled"] is True
@@ -184,8 +184,8 @@ def test_index_contains_v5_role_portals_and_two_whiteboards():
         'id="openDashboard"', 'id="classSelect"', 'id="outcomeSelect"', 'id="weekSelect"',
     ):
         assert identifier in html
-    assert '/static/portal.js?v=5.2.0' in html
-    assert '/static/practice_board.js?v=5.2.0' in html
+    assert '/static/portal.js?v=5.3.0' in html
+    assert '/static/practice_board.js?v=5.3.0' in html
     assert 'Administrator sign in' in html
     assert 'Lecturer sign in' in html
     assert 'Student sign in' in html
@@ -423,8 +423,8 @@ def test_index_exposes_pause_control_and_capture_status():
     html = client.get("/").text
     assert 'id="pauseTeaching"' in html
     assert 'id="practiceCaptureStatus"' in html
-    assert '/static/v2_1.js?v=5.2.0' in html
-    assert '/static/practice_board.js?v=5.2.0' in html
+    assert '/static/v2_1.js?v=5.3.0' in html
+    assert '/static/practice_board.js?v=5.3.0' in html
 
 
 
@@ -652,7 +652,7 @@ def test_service_worker_and_manifest_are_v5():
     assert manifest.status_code == 200
     assert worker.status_code == 200
     assert "Anovlad Institutional AI Tutor" in manifest.text
-    assert "anovlad-ai-tutor-v5-2-0-shell" in worker.text
+    assert "anovlad-ai-tutor-v5-3-0-shell" in worker.text
 
 
 def test_cost_aware_router_prefers_flash_for_normal_and_pro_for_advanced():
@@ -695,7 +695,7 @@ def test_v51_student_workspace_controls_are_present():
         'id="practiceFullscreen"', 'id="fullscreenBoard"',
     ):
         assert identifier in html
-    assert '/static/v2_1.js?v=5.2.0' in html
+    assert '/static/v2_1.js?v=5.3.0' in html
     css = client.get('/static/styles.css').text
     assert 'body.student-interface' in css
     assert '.practice-whiteboard-wrap:fullscreen' in css
@@ -896,3 +896,34 @@ def test_period_topics_preparation_outline_exposes_weeks_subtopics_and_activitie
         "Read chapter 1",
         "Prepare an analysis of how operations, marketing and finance are related.",
     ]
+
+
+def test_guided_lecture_speech_request_supports_style_and_natural_speed():
+    request = SpeechRequest(
+        text="Explain the concept carefully.",
+        voice="nova",
+        style="guided_lecture",
+        speed=0.94,
+    )
+    assert request.style == "guided_lecture"
+    assert request.speed == 0.94
+
+
+def test_health_exposes_guided_lecture_capabilities():
+    data = client.get("/health").json()
+    assert data["guided_lecture_notes_enabled"] is True
+    assert data["synchronised_slide_popups_enabled"] is True
+    assert data["natural_lecture_pacing_enabled"] is True
+
+
+def test_frontend_uses_continuous_guided_lecture_audio_and_progressive_popups():
+    root = os.path.join(os.path.dirname(__file__), "..", "app", "static")
+    v2 = open(os.path.join(root, "v2_1.js"), encoding="utf-8").read()
+    app_js = open(os.path.join(root, "app.js"), encoding="utf-8").read()
+    css = open(os.path.join(root, "styles.css"), encoding="utf-8").read()
+    assert "style: 'guided_lecture'" in v2
+    assert "speed: 0.94" in v2
+    assert "playLectureChunk" in v2
+    assert "data-lecture-cue" in app_js
+    assert "lecture-revealed" in css
+    assert "lecture-notes-panel" in css
