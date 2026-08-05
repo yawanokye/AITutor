@@ -15,6 +15,7 @@
   Object.assign(state, {
     practice: null,
     teachingActive: false,
+    teachingPaused: false,
     teachingRunId: 0,
     teachingAbortController: null
   });
@@ -29,7 +30,7 @@
     try {
       const visual = state.visualPlan?.kind === 'image_annotation' ? null : state.visualPlan;
       const payload = {
-        version: '5.1.1',
+        version: '5.2.0',
         sessionId: state.sessionId,
         chatLog: state.chatLog.slice(-80),
         lastAnswer: state.lastAnswer,
@@ -146,6 +147,12 @@
     return plan.kind === 'none' ? 0 : 1;
   }
 
+  function narrationSentences(text) {
+    const clean = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!clean) return [];
+    return (clean.match(/[^.!?]+(?:[.!?]+|$)/g) || [clean]).map(item => item.trim()).filter(Boolean);
+  }
+
   function currentVisualNarration(plan, includeIntro = false) {
     if (!plan) return '';
     const intro = includeIntro ? [plan.title, plan.caption].filter(Boolean).join('. ') : '';
@@ -160,15 +167,95 @@
     return [intro, visualPlanToSpeech(plan)].filter(Boolean).join('. ');
   }
 
+  function visualTeachingSegments(plan, index, includeIntro = false) {
+    const segments = [];
+    const push = (text, selector = '', pause = 500) => {
+      const clean = String(text || '').replace(/\s+/g, ' ').trim();
+      if (clean) segments.push({ text: clean, selector, pause });
+    };
+    if (includeIntro) push([plan.title, plan.caption].filter(Boolean).join('. '), '', 700);
+    if (plan.kind === 'steps') {
+      const step = plan.steps?.[index] || {};
+      push(`Step ${index + 1}. ${step.title || ''}`, '[data-teach-section-block="title"]', 500);
+      narrationSentences(step.narration || step.explanation).forEach((sentence, sentenceIndex) => {
+        push(sentence, `[data-teach-section="explanation"][data-teach-sentence="${sentenceIndex}"]`, 420);
+      });
+      push(step.equation ? `The equation is ${step.equation}` : '', '[data-teach-section-block="equation"]', 700);
+      push(step.learner_prompt ? `Now think about this. ${step.learner_prompt}` : '', '[data-teach-section-block="learner-prompt"]', 1400);
+      return segments;
+    }
+    if (plan.kind === 'slides') {
+      const slide = plan.slides?.[index] || {};
+      push(slide.title, '[data-teach-section-block="title"]', 550);
+      (slide.bullets || []).forEach((bullet, bulletIndex) => {
+        narrationSentences(bullet).forEach((sentence, sentenceIndex) => {
+          push(sentence, `[data-teach-section="bullet-${bulletIndex}"][data-teach-sentence="${sentenceIndex}"]`, 380);
+        });
+      });
+      narrationSentences(slide.explanation).forEach((sentence, sentenceIndex) => {
+        push(sentence, `[data-teach-section="explanation"][data-teach-sentence="${sentenceIndex}"]`, 520);
+      });
+      push(slide.equation ? `Look at this expression. ${slide.equation}` : '', '[data-teach-section-block="equation"]', 800);
+      narrationSentences(slide.worked_example).forEach((sentence, sentenceIndex) => {
+        push(sentence, `[data-teach-section="worked-example"][data-teach-sentence="${sentenceIndex}"]`, 620);
+      });
+      (slide.key_terms || []).forEach((term, termIndex) => {
+        push(`A key term here is ${term}.`, `[data-teach-term="${termIndex}"]`, 350);
+      });
+      narrationSentences(slide.speaker_note).forEach((sentence, sentenceIndex) => {
+        push(sentence, `[data-teach-section="speaker-note"][data-teach-sentence="${sentenceIndex}"]`, 560);
+      });
+      narrationSentences(slide.check_question).forEach((sentence, sentenceIndex) => {
+        push(`Check your understanding. ${sentence}`, `[data-teach-section="check-question"][data-teach-sentence="${sentenceIndex}"]`, 1800);
+      });
+      return segments;
+    }
+    push(visualPlanToSpeech(plan), '', 600);
+    return segments;
+  }
+
+  function clearTeachingHighlight() {
+    visualContent.querySelectorAll('.teaching-current, .teaching-section-current').forEach(node => {
+      node.classList.remove('teaching-current', 'teaching-section-current');
+    });
+  }
+
+  function highlightTeachingSegment(selector) {
+    clearTeachingHighlight();
+    if (!selector) return;
+    const node = visualContent.querySelector(selector);
+    if (!node) return;
+    node.classList.add('teaching-current');
+    node.closest('.teaching-section')?.classList.add('teaching-section-current');
+    node.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+  }
+
+  async function waitForTeachingResume(runId) {
+    while (state.teachingPaused && state.teachingActive && runId === state.teachingRunId) {
+      await new Promise(resolve => setTimeout(resolve, 120));
+    }
+  }
+
+  async function pacedDelay(milliseconds, runId) {
+    let remaining = milliseconds;
+    while (remaining > 0 && state.teachingActive && runId === state.teachingRunId) {
+      await waitForTeachingResume(runId);
+      const slice = Math.min(remaining, 120);
+      await new Promise(resolve => setTimeout(resolve, slice));
+      remaining -= slice;
+    }
+  }
+
   async function speakAndWait(text, runId) {
     if (!state.config?.openai_enabled) throw new Error('Voice output needs OPENAI_API_KEY to be configured.');
+    await waitForTeachingResume(runId);
     state.teachingAbortController?.abort();
     const controller = new AbortController();
     state.teachingAbortController = controller;
     const response = await fetch('/api/speech', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice: el('voice').value }),
+      body: JSON.stringify({ text: String(text || '').slice(0, 3900), voice: el('voice').value }),
       signal: controller.signal
     });
     if (!response.ok) {
@@ -184,6 +271,9 @@
     await new Promise((resolve, reject) => {
       const finished = () => { cleanup(); resolve(); };
       const failed = () => { cleanup(); reject(new Error('Audio playback failed.')); };
+      const pausedByTutor = () => {
+        if (state.teachingPaused) audioPlayer.pause();
+      };
       const cleanup = () => {
         audioPlayer.removeEventListener('ended', finished);
         audioPlayer.removeEventListener('error', failed);
@@ -191,6 +281,17 @@
       audioPlayer.addEventListener('ended', finished, { once: true });
       audioPlayer.addEventListener('error', failed, { once: true });
       audioPlayer.play().catch(failed);
+      const pauseWatcher = setInterval(async () => {
+        if (runId !== state.teachingRunId || !state.teachingActive) {
+          clearInterval(pauseWatcher);
+          cleanup();
+          resolve();
+          return;
+        }
+        if (state.teachingPaused && !audioPlayer.paused) pausedByTutor();
+        if (!state.teachingPaused && audioPlayer.paused && !audioPlayer.ended) audioPlayer.play().catch(() => {});
+        if (audioPlayer.ended) clearInterval(pauseWatcher);
+      }, 120);
     });
   }
 
@@ -203,11 +304,14 @@
     }
     stopStepTeaching(false);
     state.teachingActive = true;
+    state.teachingPaused = false;
     const runId = ++state.teachingRunId;
     el('teachVisual').classList.add('hidden');
+    el('pauseTeaching')?.classList.remove('hidden');
+    el('pauseTeaching').textContent = 'Ⅱ Pause';
     el('stopTeaching').classList.remove('hidden');
     visualViewport.classList.add('teaching-mode');
-    setStatus('Teaching the visual step by step…');
+    setStatus('Teaching the active section at a lecturer-like pace…');
     try {
       for (let index = state.visualIndex; index < count; index += 1) {
         if (!state.teachingActive || runId !== state.teachingRunId) break;
@@ -215,10 +319,21 @@
         clearInk(false);
         renderCurrentVisual();
         visualContent.classList.add('teaching-focus');
-        await speakAndWait(currentVisualNarration(plan, index === 0), runId);
+        const segments = visualTeachingSegments(plan, index, index === 0);
+        for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+          if (!state.teachingActive || runId !== state.teachingRunId) break;
+          await waitForTeachingResume(runId);
+          const segment = segments[segmentIndex];
+          highlightTeachingSegment(segment.selector);
+          setStatus(`Teaching section ${index + 1} of ${count}, part ${segmentIndex + 1} of ${segments.length}…`);
+          await speakAndWait(segment.text, runId);
+          await pacedDelay(segment.pause, runId);
+        }
+        clearTeachingHighlight();
         visualContent.classList.remove('teaching-focus');
+        await pacedDelay(650, runId);
       }
-      if (state.teachingActive && runId === state.teachingRunId) setStatus('Visual lesson complete.');
+      if (state.teachingActive && runId === state.teachingRunId) setStatus('Detailed visual lesson complete.');
     } catch (error) {
       if (error.name !== 'AbortError') setStatus(error.message);
     } finally {
@@ -226,15 +341,34 @@
     }
   }
 
+  function toggleTeachingPause() {
+    if (!state.teachingActive) return;
+    state.teachingPaused = !state.teachingPaused;
+    const button = el('pauseTeaching');
+    if (state.teachingPaused) {
+      audioPlayer.pause();
+      button.textContent = '▶ Resume';
+      setStatus('Teaching paused.');
+    } else {
+      if (audioPlayer.src && !audioPlayer.ended) audioPlayer.play().catch(() => {});
+      button.textContent = 'Ⅱ Pause';
+      setStatus('Teaching resumed.');
+    }
+  }
+
   function stopStepTeaching(updateStatus = true) {
     state.teachingActive = false;
+    state.teachingPaused = false;
     state.teachingRunId += 1;
     state.teachingAbortController?.abort();
     state.teachingAbortController = null;
     audioPlayer.pause();
+    clearTeachingHighlight();
     visualContent.classList.remove('teaching-focus');
     visualViewport.classList.remove('teaching-mode');
     el('teachVisual').classList.remove('hidden');
+    el('pauseTeaching')?.classList.add('hidden');
+    if (el('pauseTeaching')) el('pauseTeaching').textContent = 'Ⅱ Pause';
     el('stopTeaching').classList.add('hidden');
     if (updateStatus) setStatus('Step-by-step teaching stopped.');
   }
@@ -539,6 +673,7 @@
       ? `Your lecturer has set ${selected} as the required response method.`
       : 'Choose typing, voice recording or handwriting.';
     el('practiceBoard').classList.toggle('hidden', !allowed.includes('whiteboard'));
+    if (el('checkWork')) el('checkWork').title = selected === 'whiteboard' ? 'Check the handwritten practice response' : 'Check my teaching-whiteboard work';
     if (!fromQuestion && selected === 'typed') el('practiceAnswer').focus();
     if (!fromQuestion && selected === 'whiteboard') el('practiceWhiteboardWrap')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -622,8 +757,10 @@
     setStatus('Guided practice closed.');
   }
 
-  async function practiceBoardBlob() {
-    return window.aiTutorPracticeBoard?.toBlob?.() || null;
+  async function capturePracticeBoard() {
+    if (window.aiTutorPracticeBoard?.capture) return window.aiTutorPracticeBoard.capture();
+    const blob = await (window.aiTutorPracticeBoard?.toBlob?.() || null);
+    return blob ? { blob, strokeCount: Number(window.aiTutorPracticeBoard?.strokeCount?.() || 0), width: 0, height: 0, coverage: 0 } : null;
   }
 
   async function checkPracticeAnswer() {
@@ -657,14 +794,24 @@
     try {
       if (mode === 'voice' && practiceAudioBlob) form.append('audio_response', practiceAudioBlob, practiceAudioFilename(practiceAudioBlob));
       if (mode === 'whiteboard') {
-        const blob = await practiceBoardBlob();
-        if (blob) form.append('board_image', blob, 'practice-whiteboard.png');
+        const capture = await capturePracticeBoard();
+        if (!capture?.blob) {
+          throw new Error('Your handwriting could not be captured clearly. Use a dark pen, write slightly larger, and try again.');
+        }
+        form.append('board_image', capture.blob, 'practice-whiteboard-cropped.png');
+        form.append('board_stroke_count', String(capture.strokeCount || 0));
+        form.append('board_capture_width', String(capture.width || 0));
+        form.append('board_capture_height', String(capture.height || 0));
+        form.append('board_ink_coverage', String(capture.coverage || 0));
       }
       const data = await apiJson('/api/practice/check', { method: 'POST', body: form });
-      const tone = data.correct ? 'success' : 'warning';
-      const hint = data.hint ? `<p><strong>Hint:</strong> ${escapeHtml(data.hint)}</p>` : '';
-      practiceFeedback(`<strong>${data.correct ? 'Correct' : 'Try again'}</strong><p>${escapeHtml(data.feedback)}</p>${hint}`, tone);
-      el('practiceScore').textContent = `Score ${data.total_score}%`;
+      const partial = !data.correct && Number(data.question_score || 0) > 0;
+      const tone = data.correct ? 'success' : partial ? 'info' : 'warning';
+      const heading = data.correct ? 'Correct' : partial ? 'Partly correct' : 'Try again';
+      const hint = data.hint ? `<p><strong>Next hint:</strong> ${escapeHtml(data.hint)}</p>` : '';
+      const questionScore = Number.isFinite(Number(data.question_score)) ? `<p><strong>This response:</strong> ${Number(data.question_score)}%</p>` : '';
+      practiceFeedback(`<strong>${heading}</strong>${questionScore}<p>${escapeHtml(data.feedback)}</p>${hint}`, tone);
+      el('practiceScore').textContent = `Activity score ${data.total_score}%`;
       if (data.completed) {
         el('practiceProgressBar').style.width = '100%';
         el('practiceProgressText').textContent = 'Practice complete';
@@ -754,6 +901,11 @@
   }
 
   async function checkWhiteboardWork() {
+    if (state.practice && state.practice.selectedMode === 'whiteboard' && window.aiTutorPracticeBoard?.hasInk?.()) {
+      setStatus('Checking the handwritten practice response…', true);
+      await checkPracticeAnswer();
+      return;
+    }
     if (!state.visualPlan && state.strokes.length === 0) {
       setStatus('Write or display some working on the whiteboard first.');
       return;
@@ -790,6 +942,7 @@
   }
 
   el('teachVisual').addEventListener('click', startStepTeaching);
+  el('pauseTeaching')?.addEventListener('click', toggleTeachingPause);
   el('stopTeaching').addEventListener('click', () => stopStepTeaching(true));
   el('checkWork').addEventListener('click', checkWhiteboardWork);
   el('editVisual').addEventListener('click', openVisualEditor);

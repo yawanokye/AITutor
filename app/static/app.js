@@ -615,25 +615,39 @@ function renderCurrentVisual() {
   requestAnimationFrame(resizeDrawingCanvas);
 }
 
+
+function splitTeachingSentences(text) {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return [];
+  const matches = clean.match(/[^.!?]+(?:[.!?]+|$)/g) || [clean];
+  return matches.map(item => item.trim()).filter(Boolean);
+}
+
+function teachingSentenceMarkup(text, section) {
+  return splitTeachingSentences(text).map((sentence, index) =>
+    `<span class="teaching-sentence" data-teach-section="${escapeHtml(section)}" data-teach-sentence="${index}">${escapeHtml(sentence)}</span>`
+  ).join(' ');
+}
+
 function renderStep(plan) {
   const steps = plan.steps || [];
   const step = steps[state.visualIndex] || { title: plan.title || 'Working', explanation: plan.caption || '', equation: '' };
   const equation = step.equation
-    ? `<div class="board-equation">\\[${escapeHtml(step.equation)}\\]</div>`
+    ? `<div class="board-equation teaching-section" data-teach-section-block="equation">\[${escapeHtml(step.equation)}\]</div>`
     : '';
   const extraEquations = state.visualIndex === steps.length - 1 && plan.equations?.length
-    ? `<div class="equation-stack">${plan.equations.map(eq => `<div>\\[${escapeHtml(eq)}\\]</div>`).join('')}</div>`
+    ? `<div class="equation-stack teaching-section" data-teach-section-block="extra-equations">${plan.equations.map((eq, index) => `<div data-teach-equation="${index}">\[${escapeHtml(eq)}\]</div>`).join('')}</div>`
     : '';
   const learnerPrompt = step.learner_prompt
-    ? `<div class="learner-prompt"><strong>Your turn:</strong> ${escapeHtml(step.learner_prompt)}</div>`
+    ? `<div class="learner-prompt teaching-section" data-teach-section-block="learner-prompt"><strong>Your turn:</strong> ${teachingSentenceMarkup(step.learner_prompt, 'learner-prompt')}</div>`
     : '';
   visualContent.innerHTML = `
     <div class="step-board">
       <div class="step-number">${state.visualIndex + 1}</div>
       <div class="step-copy">
         <span class="board-kicker">Step ${state.visualIndex + 1}</span>
-        <h3>${escapeHtml(step.title || `Step ${state.visualIndex + 1}`)}</h3>
-        <p>${escapeHtml(step.explanation || '')}</p>
+        <h3 class="teaching-section" data-teach-section-block="title">${escapeHtml(step.title || `Step ${state.visualIndex + 1}`)}</h3>
+        <p class="teaching-section" data-teach-section-block="explanation">${teachingSentenceMarkup(step.narration || step.explanation || '', 'explanation')}</p>
         ${equation}${extraEquations}${learnerPrompt}
       </div>
     </div>`;
@@ -789,17 +803,17 @@ function renderImageAnnotation(plan) {
 
 function renderSlide(plan) {
   const slide = (plan.slides || [])[state.visualIndex] || { title: plan.title || 'Lesson', bullets: [], equation: '', explanation: '', worked_example: '', key_terms: [], check_question: '', speaker_note: '' };
-  const bullets = (slide.bullets || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
-  const equation = slide.equation ? `<div class="slide-equation">\[${escapeHtml(slide.equation)}\]</div>` : '';
-  const explanation = slide.explanation ? `<div class="slide-explanation"><h4>Detailed explanation</h4><p>${escapeHtml(slide.explanation)}</p></div>` : '';
-  const example = slide.worked_example ? `<div class="slide-example"><h4>Worked example or application</h4><p>${escapeHtml(slide.worked_example)}</p></div>` : '';
-  const terms = (slide.key_terms || []).length ? `<div class="slide-key-terms"><strong>Key terms</strong>${slide.key_terms.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : '';
-  const check = slide.check_question ? `<div class="slide-check"><strong>Check your understanding</strong><p>${escapeHtml(slide.check_question)}</p></div>` : '';
-  const note = slide.speaker_note ? `<div class="slide-note slide-teaching-note"><h4>Detailed teaching notes</h4><p>${escapeHtml(slide.speaker_note)}</p></div>` : '';
+  const bullets = (slide.bullets || []).map((item, index) => `<li class="teaching-section" data-teach-section-block="bullet-${index}">${teachingSentenceMarkup(item, `bullet-${index}`)}</li>`).join('');
+  const equation = slide.equation ? `<div class="slide-equation teaching-section" data-teach-section-block="equation">\[${escapeHtml(slide.equation)}\]</div>` : '';
+  const explanation = slide.explanation ? `<div class="slide-explanation teaching-section" data-teach-section-block="explanation"><h4>Detailed explanation</h4><p>${teachingSentenceMarkup(slide.explanation, 'explanation')}</p></div>` : '';
+  const example = slide.worked_example ? `<div class="slide-example teaching-section" data-teach-section-block="worked-example"><h4>Worked example or application</h4><p>${teachingSentenceMarkup(slide.worked_example, 'worked-example')}</p></div>` : '';
+  const terms = (slide.key_terms || []).length ? `<div class="slide-key-terms teaching-section" data-teach-section-block="key-terms"><strong>Key terms</strong>${slide.key_terms.map((item, index) => `<span data-teach-term="${index}">${escapeHtml(item)}</span>`).join('')}</div>` : '';
+  const check = slide.check_question ? `<div class="slide-check teaching-section" data-teach-section-block="check-question"><strong>Check your understanding</strong><p>${teachingSentenceMarkup(slide.check_question, 'check-question')}</p></div>` : '';
+  const note = slide.speaker_note ? `<div class="slide-note slide-teaching-note teaching-section" data-teach-section-block="speaker-note"><h4>Lecturer-style explanation</h4><p>${teachingSentenceMarkup(slide.speaker_note, 'speaker-note')}</p></div>` : '';
   visualContent.innerHTML = `
     <div class="lesson-slide detailed-slide">
-      <span class="slide-number">Detailed lesson slide ${state.visualIndex + 1}</span>
-      <h3>${escapeHtml(slide.title)}</h3>
+      <span class="slide-number">Detailed lesson section ${state.visualIndex + 1}</span>
+      <h3 class="teaching-section" data-teach-section-block="title">${escapeHtml(slide.title)}</h3>
       ${bullets ? `<ul class="slide-bullets">${bullets}</ul>` : ''}
       ${equation}${explanation}${example}${terms}${check}${note}
     </div>`;

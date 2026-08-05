@@ -722,3 +722,44 @@ body.student-interface #dashboardOpen { font-weight: 800; }
   background: #fff8e9;
 }
 .course-structure-warning span { font-weight: 500; color: #6f5a3c; }
+
+/* v5.2 paced teaching and reliable handwritten practice */
+.teaching-section {
+  transition: background-color .22s ease, box-shadow .22s ease, transform .22s ease, opacity .22s ease;
+  border-radius: 12px;
+}
+.teaching-mode .teaching-section {
+  opacity: .62;
+}
+.teaching-mode .teaching-section-current {
+  opacity: 1;
+  background: rgba(255, 241, 163, .44);
+  box-shadow: 0 0 0 3px rgba(201, 157, 31, .18);
+  transform: translateY(-1px);
+}
+.teaching-sentence {
+  border-radius: 6px;
+  padding: 1px 2px;
+  transition: background-color .18s ease, color .18s ease, box-shadow .18s ease;
+}
+.teaching-current {
+  background: #fff0a8;
+  color: #173f35;
+  box-shadow: 0 0 0 2px rgba(204, 156, 19, .26);
+}
+.slide-key-terms .teaching-current {
+  background: #fff0a8;
+  color: #173f35;
+}
+#practiceCaptureStatus {
+  margin: .65rem .25rem 0;
+  color: #23604f;
+  font-weight: 700;
+}
+.practice-feedback.info {
+  border-color: rgba(42, 104, 151, .26);
+  background: rgba(232, 244, 252, .78);
+}
+@media (prefers-reduced-motion: reduce) {
+  .teaching-section, .teaching-sentence { transition: none; }
+}
