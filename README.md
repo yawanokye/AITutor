@@ -1,9 +1,24 @@
-# Anovlad Institutional AI Tutor v5.2.0
+# Anovlad Institutional AI Tutor v5.3.0
 
 A Render-ready, role-based AI learning platform for institutions. Administration, teaching and learning use dedicated portals, while lecturer-approved course documents become a structured, selectable AI tutoring environment.
 
-Version 5.1 provides a simpler course-first student interface, lecturer-controlled typed, voice or handwritten practice responses, vertically expandable full-screen whiteboards, week-by-week course-outline activities, outcome-generated teaching notes when readings are absent, and detailed visual teaching that matches the written notes. It retains the document ownership and deletion safeguards introduced in v5.0.3.
+Version 5.3 retains the course-first student interface, typed, voice and handwritten practice responses, expandable whiteboards, structured course outlines and institutional document controls. It adds a guided lecture mode in which detailed notes are spoken continuously while the matching visual element appears on the whiteboard at the relevant moment.
 
+
+
+## v5.3 guided lecture presentation
+
+Version 5.3 changes **Teach like a lecturer** into a continuous guided lecture rather than a sequence of separately generated sentence clips. For each lesson section, the browser sends one connected lecture script to speech generation, then synchronises the resulting audio with the detailed teaching notes and visual cues.
+
+- The detailed notes remain the main teaching text on the left side of the whiteboard.
+- The exact sentence being explained is highlighted as the lecture progresses.
+- Key ideas, equations, worked examples, key terms and understanding checks appear progressively on the right side at the relevant point.
+- The slide does not advance until the detailed explanation for that section is complete.
+- Speech uses a guided-lecture style, a slightly slower natural speed, varied emphasis and context-sensitive pauses rather than equal pauses after every sentence.
+- Long sections are divided into a small number of connected audio chunks only when the speech API character limit requires it.
+- Pause, resume and stop remain available.
+
+No database migration or new environment variable is required. OpenAI voice output must remain configured because guided lecture audio uses the existing `/api/speech` service.
 
 ## v5.2 paced teaching and reliable handwritten practice
 
@@ -216,7 +231,7 @@ This release uses the existing Render PostgreSQL database. It does not create a 
 6. Add or confirm the environment variables below.
 7. Select **Manual Deploy**, then **Clear build cache and deploy**.
 8. Wait until the service is Live.
-9. Open `/health` and confirm version `5.2.0`.
+9. Open `/health` and confirm version `5.3.0`.
 10. Refresh the browser with `Ctrl + Shift + R`.
 
 Expected health fields include:
@@ -224,7 +239,7 @@ Expected health fields include:
 ```json
 {
   "status": "ok",
-  "version": "5.2.0",
+  "version": "5.3.0",
   "administrator_portal_enabled": true,
   "lecturer_managed_enrolment": true,
   "structured_course_content_enabled": true,
