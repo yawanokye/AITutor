@@ -76,7 +76,7 @@ Choose one method only.
 - [ ] Select **Clear build cache and deploy**.
 - [ ] Wait for the status to become **Live**.
 - [ ] Open `/health`.
-- [ ] Confirm `version` is `5.1.1`.
+- [ ] Confirm `version` is `5.2.0`.
 - [ ] Confirm the five new capability flags are `true`.
 - [ ] Refresh the browser with `Ctrl + Shift + R`.
 
@@ -155,7 +155,7 @@ Choose one method only.
 - [ ] Upload a document to Lecturer A's course and confirm Lecturer B cannot see it.
 - [ ] Delete a lecturer course document and confirm it disappears from both the course tree and course-material list.
 - [ ] Ask a question containing a unique phrase from the deleted document and confirm the source is no longer retrieved.
-- [ ] Confirm `/health` reports version `5.1.1`.
+- [ ] Confirm `/health` reports version `5.2.0`.
 
 ## v5.1 functional verification
 
@@ -176,8 +176,21 @@ Choose one method only.
 ## v5.1.1 course-outline restructuring
 
 - [ ] Deploy with **Clear build cache and deploy**.
-- [ ] Confirm `/health` reports `5.1.1` and `period_table_outline_parser_enabled: true`.
+- [ ] Confirm `/health` reports `5.2.0` and `period_table_outline_parser_enabled: true`.
 - [ ] Sign out, hard-refresh the browser, and sign in again.
 - [ ] For every outline uploaded before v5.1.1 that shows “Complete document”, ask the lecturer to re-upload the same DOCX once as **Detailed course outline**.
 - [ ] Open the course as a student and confirm the week-by-week cards display topics, subtopics, and preparation activities.
 - [ ] Confirm selecting a subtopic starts the lesson for that exact subtopic.
+
+
+## v5.2 paced teaching and practice-capture verification
+
+- [ ] Confirm `/health` reports `5.2.0`, `cropped_practice_whiteboard_capture_enabled: true`, `partial_practice_credit_enabled: true`, and `paced_section_teaching_enabled: true`.
+- [ ] Start a handwritten practice question, write only part of the answer, and select **Check answer**.
+- [ ] Confirm the interface reports that handwriting was captured and shows a question score rather than completing at 0%.
+- [ ] Confirm a partly correct response remains open for improvement and receives partial activity credit.
+- [ ] During handwritten practice, select the checkmark on the teaching whiteboard and confirm it checks the active practice response rather than the empty teaching board.
+- [ ] Expand the practice board, write near the bottom, and confirm only the written region is submitted clearly.
+- [ ] Start **Teach step by step** and confirm the active title, sentence, equation or worked example is highlighted while it is spoken.
+- [ ] Confirm the tutor finishes the detailed explanation for the active section before moving to the next section.
+- [ ] Test **Pause**, **Resume**, and **Stop** during narration.

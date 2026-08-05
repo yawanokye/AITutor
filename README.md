@@ -1,13 +1,19 @@
-# Anovlad Institutional AI Tutor v5.1.1
+# Anovlad Institutional AI Tutor v5.2.0
 
 A Render-ready, role-based AI learning platform for institutions. Administration, teaching and learning use dedicated portals, while lecturer-approved course documents become a structured, selectable AI tutoring environment.
 
 Version 5.1 provides a simpler course-first student interface, lecturer-controlled typed, voice or handwritten practice responses, vertically expandable full-screen whiteboards, week-by-week course-outline activities, outcome-generated teaching notes when readings are absent, and detailed visual teaching that matches the written notes. It retains the document ownership and deletion safeguards introduced in v5.0.3.
 
 
-## v5.1.1 course-outline table correction
+## v5.2 paced teaching and reliable handwritten practice
 
-Version 5.1.1 corrects Word course outlines that place the teaching schedule in a table headed **Period**, **Topics**, and **Student’s Preparation**. The parser now preserves each paragraph inside table cells, converts number words such as One–Twenty into Week 1–20, creates selectable week topics and subtopics, extracts preparation activities, reads the course title from the course-information table, and combines course objectives with expected outcomes.
+Version 5.2 changes visual teaching from automatic slide reading to lecturer-like, section-synchronised instruction. The tutor now highlights the exact title, sentence, equation, worked example, key term or understanding check being explained. It finishes the detailed explanation for the active section before moving forward, adds natural pauses, and provides Pause, Resume and Stop controls.
+
+Handwritten practice capture has also been rebuilt. The browser commits the final pen stroke, crops the image to the learner's actual writing, enlarges small writing before upload, reports capture metadata, and routes the main whiteboard check button to the active practice response when appropriate. The server awards partial credit for incomplete but markable work, prevents an inconsistent zero-score response from completing an activity, retries vision analysis when verified handwriting is incorrectly reported as blank, and keeps unreadable attempts open for resubmission.
+
+### v5.1.1 course-outline table correction
+
+Version 5.1.1 corrects Word course outlines that place the teaching schedule in a table headed **Period**, **Topics**, and **Student’s Preparation**. The parser preserves each paragraph inside table cells, converts number words such as One–Twenty into Week 1–20, creates selectable week topics and subtopics, extracts preparation activities, reads the course title from the course-information table, and combines course objectives with expected outcomes.
 
 Outlines uploaded before v5.1.1 do not contain the original Word file bytes in the database. After deploying this release, the lecturer must re-upload each affected outline once. Uploading the same filename and category replaces the old parsed structure and indexed text.
 
@@ -210,7 +216,7 @@ This release uses the existing Render PostgreSQL database. It does not create a 
 6. Add or confirm the environment variables below.
 7. Select **Manual Deploy**, then **Clear build cache and deploy**.
 8. Wait until the service is Live.
-9. Open `/health` and confirm version `5.1.1`.
+9. Open `/health` and confirm version `5.2.0`.
 10. Refresh the browser with `Ctrl + Shift + R`.
 
 Expected health fields include:
@@ -218,7 +224,7 @@ Expected health fields include:
 ```json
 {
   "status": "ok",
-  "version": "5.1.1",
+  "version": "5.2.0",
   "administrator_portal_enabled": true,
   "lecturer_managed_enrolment": true,
   "structured_course_content_enabled": true,
