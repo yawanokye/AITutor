@@ -32,9 +32,20 @@ MARKDOWN_HEADING_RE = re.compile(r"^(#{1,5})\s+(.+)$")
 BULLET_RE = re.compile(r"^\s*(?:[-•*]|\d+[.)]|[A-Za-z][.)])\s+")
 
 WEEK_TITLE_RE = re.compile(r"^(?:week|wk)\s*([0-9]{1,2}|[IVXLC]+)\b(?:\s*[-:.)]\s*|\s+)?(.*)$", re.IGNORECASE)
-TABLE_WEEK_HEADERS = {"week", "wk", "teaching week", "session"}
-TABLE_TOPIC_HEADERS = {"topic", "topics", "content", "unit", "theme", "lesson", "subject matter"}
-TABLE_SUBUNIT_HEADERS = {"subunit", "sub-unit", "subtopic", "sub-topic", "activities", "learning activities", "weekly activities", "outline"}
+TABLE_WEEK_HEADERS = {"week", "wk", "teaching week", "session", "period", "teaching period", "class period"}
+TABLE_TOPIC_HEADERS = {"topic", "topics", "content", "unit", "theme", "lesson", "subject matter", "course content"}
+TABLE_PREPARATION_HEADERS = {
+    "student preparation", "student's preparation", "student’s preparation", "preparation",
+    "student preparation/activity", "reading", "readings", "student task", "student tasks",
+}
+TABLE_ACTIVITY_HEADERS = {"activities", "learning activities", "weekly activities", "student activities", "learning activity"}
+TABLE_SUBUNIT_HEADERS = {"subunit", "sub-unit", "subtopic", "sub-topic", "outline"}
+NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+    "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+}
 
 
 def _cell_items(value: str) -> list[str]:
@@ -44,63 +55,158 @@ def _cell_items(value: str) -> list[str]:
         for item in re.split(r"\s*[;•]\s*", line):
             clean = BULLET_RE.sub("", _clean_line(item)).strip(" -•*\t")
             if clean and clean not in parts:
-                parts.append(clean[:300])
+                parts.append(clean[:500])
     return parts
+
+
+def _cell_paragraph_items(cell: Any) -> list[str]:
+    """Preserve paragraph boundaries inside a Word table cell.
+
+    Many course outlines store the main topic and every subtopic in separate
+    paragraphs, even when the paragraph styles are inconsistent. Using
+    ``cell.text`` followed by whitespace normalisation destroys those
+    boundaries and collapses an entire semester into one line.
+    """
+    items: list[str] = []
+    for paragraph in getattr(cell, "paragraphs", []):
+        paragraph_text = _clean_line(paragraph.text)
+        for raw_item in re.split(r"\s*[;•]\s*", paragraph_text):
+            text = BULLET_RE.sub("", _clean_line(raw_item)).strip(" -•*\t")
+            if text and text not in items:
+                items.append(text[:500])
+    return items or _cell_items(getattr(cell, "text", ""))
+
+
+def _roman_to_int(value: str) -> int | None:
+    value = value.upper().strip()
+    if not value or not re.fullmatch(r"[IVXLC]+", value):
+        return None
+    values = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100}
+    total = 0
+    previous = 0
+    for character in reversed(value):
+        current = values[character]
+        total += -current if current < previous else current
+        previous = max(previous, current)
+    return total if 0 < total <= 52 else None
+
+
+def _normalise_week_number(value: str) -> str:
+    clean = _clean_line(value).strip(" .:-()[]")
+    clean = re.sub(r"^(?:week|wk|period|session)\s*", "", clean, flags=re.IGNORECASE).strip(" .:-()[]")
+    first = clean.split()[0].lower() if clean else ""
+    if first.isdigit():
+        return str(int(first))
+    if first in NUMBER_WORDS:
+        return str(NUMBER_WORDS[first])
+    roman = _roman_to_int(first)
+    return str(roman) if roman is not None else clean[:30]
+
+
+def _course_title_from_tables(document: Document) -> str:
+    for table in document.tables:
+        for row in table.rows:
+            values = [_clean_line(cell.text) for cell in row.cells]
+            if len(values) < 2:
+                continue
+            label = values[0].lower().replace("/", " ")
+            if "course code" in label or "course title" in label:
+                return values[1][:200]
+    return ""
 
 
 def _table_week_sections(document: Document) -> list[tuple[int, str, list[str]]]:
     sections: list[tuple[int, str, list[str]]] = []
     for table_number, table in enumerate(document.tables, start=1):
-        rows = [[_clean_line(cell.text) for cell in row.cells] for row in table.rows]
-        rows = [row for row in rows if any(row)]
-        if not rows:
+        if not table.rows:
             continue
-        headers = [cell.lower().strip() for cell in rows[0]]
+        header_cells = table.rows[0].cells
+        headers = [_clean_line(cell.text).lower().strip() for cell in header_cells]
+
         def column(names: set[str]) -> int | None:
             for idx, header in enumerate(headers):
                 if header in names or any(name in header for name in names):
                     return idx
             return None
+
         week_idx = column(TABLE_WEEK_HEADERS)
         topic_idx = column(TABLE_TOPIC_HEADERS)
-        subunit_idx = column(TABLE_SUBUNIT_HEADERS)
-        data_rows = rows[1:] if week_idx is not None or topic_idx is not None else rows
-        if week_idx is not None:
+        preparation_idx = column(TABLE_PREPARATION_HEADERS)
+        activity_idx = column(TABLE_ACTIVITY_HEADERS)
+        explicit_subunit_idx = column(TABLE_SUBUNIT_HEADERS)
+
+        # A week/period table must contain both a period marker and a topic/content column.
+        if week_idx is not None and topic_idx is not None:
             current_week = ""
-            for row in data_rows:
-                week_cell = row[week_idx] if week_idx < len(row) else ""
-                if week_cell:
-                    current_week = week_cell
+            for row in table.rows[1:]:
+                cells = row.cells
+                week_items = _cell_paragraph_items(cells[week_idx]) if week_idx < len(cells) else []
+                if week_items:
+                    current_week = week_items[0]
                 if not current_week:
                     continue
-                topic = row[topic_idx] if topic_idx is not None and topic_idx < len(row) else ""
-                week_match = WEEK_TITLE_RE.match(current_week)
-                week_label = f"Week {week_match.group(1)}" if week_match else f"Week {current_week}"
-                trailing = (week_match.group(2).strip() if week_match else "")
-                title_topic = topic or trailing
-                title = f"{week_label}: {title_topic}" if title_topic else week_label
-                content_lines = []
-                for idx, value in enumerate(row):
-                    if not value or idx == week_idx:
-                        continue
-                    label = rows[0][idx] if idx < len(rows[0]) and rows[0][idx] else f"Column {idx + 1}"
-                    content_lines.append(f"{label}: {value}")
-                sections.append((1, title[:160], content_lines or [title_topic]))
-                subunit_value = row[subunit_idx] if subunit_idx is not None and subunit_idx < len(row) else ""
-                if not subunit_value and topic_idx is not None and topic_idx < len(row):
-                    subunit_value = row[topic_idx]
-                for subunit in _cell_items(subunit_value):
-                    if subunit.lower() == title_topic.lower():
-                        continue
-                    sections.append((2, subunit[:160], [f"Part of {title}.", subunit]))
-            continue
-        # Preserve non-week tables as a readable section so a learner can open them.
-        table_lines = []
-        for row in rows:
-            table_lines.append(" | ".join(value for value in row if value))
-        sections.append((2, f"Table {table_number}", table_lines))
-    return sections
 
+                topic_items = _cell_paragraph_items(cells[topic_idx]) if topic_idx < len(cells) else []
+                if not topic_items:
+                    continue
+                main_topic = topic_items[0]
+                week_number = _normalise_week_number(current_week)
+                week_label = f"Week {week_number}" if week_number else f"Week {current_week}"
+                title = f"{week_label}: {main_topic}" if main_topic else week_label
+
+                preparation_items = (
+                    _cell_paragraph_items(cells[preparation_idx])
+                    if preparation_idx is not None and preparation_idx < len(cells)
+                    else []
+                )
+                activity_items = (
+                    _cell_paragraph_items(cells[activity_idx])
+                    if activity_idx is not None and activity_idx < len(cells)
+                    else []
+                )
+                content_lines = [f"Main topic: {main_topic}"]
+                if preparation_items or activity_items:
+                    content_lines.append("Student preparation and activities:")
+                    content_lines.extend(f"- {item}" for item in [*preparation_items, *activity_items])
+                sections.append((1, title[:200], content_lines))
+
+                subunits = topic_items[1:]
+                # In many outlines an “Activities” column actually lists the lesson's
+                # subtopics. Use those items as subunits when the topic cell contains
+                # only a main heading, while still showing them as weekly activities.
+                if len(topic_items) == 1:
+                    for item in activity_items:
+                        if item not in subunits:
+                            subunits.append(item)
+                if explicit_subunit_idx is not None and explicit_subunit_idx != topic_idx and explicit_subunit_idx < len(cells):
+                    for item in _cell_paragraph_items(cells[explicit_subunit_idx]):
+                        if item not in subunits:
+                            subunits.append(item)
+                for subunit in subunits:
+                    if subunit.lower() == main_topic.lower():
+                        continue
+                    sections.append((2, subunit[:200], [f"Part of {title}.", subunit]))
+            continue
+
+        # Keep useful non-week tables with meaningful labels, but skip decorative logo/header tables.
+        rows = [[_clean_line(cell.text) for cell in row.cells] for row in table.rows]
+        rows = [row for row in rows if any(row)]
+        if not rows:
+            continue
+        first_column = {row[0].lower() for row in rows if row and row[0]}
+        if any("course code" in value or "lecturer" in value for value in first_column):
+            section_title = "Course information"
+        elif any(value in {"attendance", "assignments", "academic dishonesty", "class participation"} for value in first_column):
+            section_title = "Course policies"
+        else:
+            # Single-cell institutional headers and layout-only tables are not learning sections.
+            meaningful_cells = [value for row in rows for value in row if value]
+            if len(rows) <= 1 or len(meaningful_cells) <= 1:
+                continue
+            section_title = f"Supporting table {table_number}"
+        table_lines = [" | ".join(value for value in row if value) for row in rows]
+        sections.append((1, section_title, table_lines))
+    return sections
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -142,7 +248,10 @@ def _looks_like_heading(line: str) -> tuple[int, str] | None:
         return min(len(md.group(1)), 5), _clean_line(md.group(2))
     numbered = NUMBERED_HEADING_RE.match(clean)
     if numbered:
-        level = min(numbered.group(1).count(".") + 1, 5)
+        number_parts = numbered.group(1).split(".")
+        while len(number_parts) > 1 and number_parts[-1] == "0":
+            number_parts.pop()
+        level = min(max(1, len(number_parts)), 5)
         return level, _clean_line(f"{numbered.group(1)} {numbered.group(2)}")
     if HEADING_PREFIX_RE.match(clean):
         return 1 if clean.lower().startswith(("chapter", "unit", "module", "part")) else 2, clean
@@ -156,7 +265,7 @@ def _looks_like_heading(line: str) -> tuple[int, str] | None:
 
 def _extract_docx_blocks(data: bytes) -> tuple[str, list[tuple[int, str, list[str]]]]:
     document = Document(BytesIO(data))
-    title = ""
+    title = _course_title_from_tables(document)
     sections: list[tuple[int, str, list[str]]] = []
     current_level = 1
     current_title = "Complete document"
@@ -180,11 +289,21 @@ def _extract_docx_blocks(data: bytes) -> tuple[str, list[tuple[int, str, list[st
         heading_match = re.search(r"heading\s*([1-5])", style_name)
         detected = _looks_like_heading(text)
         list_context = any(term in current_title.lower() for term in ("objective", "outcome", "recommended reading", "bibliograph", "reference"))
-        if detected and NUMBERED_HEADING_RE.match(text) and list_context and not heading_match:
-            detected = None
+        # Introductory sentences such as “This course enables students to:” belong
+        # inside the objective section. A new numbered heading, such as “3.0
+        # Course Outcomes”, must still close the previous section.
+        numbered_in_context = NUMBERED_HEADING_RE.match(text)
+        if detected and list_context and not heading_match:
+            # A simple “1. Explain …” line is normally a list item inside
+            # objectives/readings. A decimal heading such as “3.0 Course
+            # Outcomes” is a genuine new section and must remain a heading.
+            if not numbered_in_context or "." not in numbered_in_context.group(1):
+                detected = None
         if heading_match or detected:
             flush(include_empty=True)
-            if heading_match:
+            if detected and NUMBERED_HEADING_RE.match(text):
+                current_level, current_title = detected
+            elif heading_match:
                 current_level = int(heading_match.group(1))
                 current_title = text
             else:
@@ -248,8 +367,10 @@ def _extract_list(lines: list[str]) -> list[str]:
         clean = BULLET_RE.sub("", _clean_line(line)).strip(" -•*\t")
         if not clean or len(clean) < 4:
             continue
-        if clean.lower().startswith(("students should", "by the end", "upon completion")) and ":" in clean:
+        if clean.lower().startswith(("students should", "by the end", "upon completion", "this course enables")) and ":" in clean:
             clean = clean.split(":", 1)[1].strip()
+        if not clean:
+            continue
         if clean and clean not in items:
             items.append(clean[:500])
     return items[:40]
@@ -305,7 +426,7 @@ def parse_document(filename: str, data: bytes) -> ParsedDocument:
         lower_title = section_title.lower()
         if WEEK_TITLE_RE.match(section_title):
             weekly_topics.append(section_title[:300])
-        if any(term in lower_title for term in ("objective", "learning outcome", "learning outcomes")):
+        if any(term in lower_title for term in ("objective", "outcome")):
             objectives.extend(_extract_list(section_lines))
         if any(term in lower_title for term in ("recommended reading", "reading list", "references", "bibliography")):
             readings.extend(_extract_list(section_lines))
@@ -609,10 +730,24 @@ class CourseContentStore:
                     for child in sections
                     if str(child.get("parent_id", "")) == str(section.get("id", "")) and str(child.get("title", "")).strip()
                 ]
+                full_section = self.get_section(str(section.get("id", ""))) or {}
+                preparation: list[str] = []
+                collecting_preparation = False
+                for raw_line in str(full_section.get("content", "")).splitlines():
+                    line = _clean_line(raw_line)
+                    if not line:
+                        continue
+                    if line.lower().startswith("student preparation and activities"):
+                        collecting_preparation = True
+                        continue
+                    if collecting_preparation:
+                        item = BULLET_RE.sub("", line).strip(" -•*\t")
+                        if item and item not in preparation:
+                            preparation.append(item[:500])
                 entries.append({
                     "id": str(section.get("id", "")), "title": title,
                     "section_path": str(section.get("section_path", title)),
-                    "subunits": children, "generated": False,
+                    "subunits": children, "preparation": preparation[:20], "generated": False,
                 })
         if entries:
             return entries[:40]
@@ -623,7 +758,7 @@ class CourseContentStore:
             {
                 "id": f"virtual:{class_id}:{index}",
                 "title": topic if WEEK_TITLE_RE.match(topic) else f"Week {index + 1}: {topic}",
-                "section_path": topic, "subunits": [], "generated": True,
+                "section_path": topic, "subunits": [], "preparation": [], "generated": True,
             }
             for index, topic in enumerate(topics[:40])
         ]
