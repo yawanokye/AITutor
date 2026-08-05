@@ -576,7 +576,12 @@
     try {
       const data = await api(`/api/classes/${encodeURIComponent(classId)}/course-structure`);
       const docs = data.documents || [];
-      container.innerHTML = docs.length ? docs.map(doc => `<div class="lecturer-document-row"><div><strong>${esc(doc.title || doc.filename)}</strong><small>${documentTypeLabel(doc.document_type)} • ${(doc.sections || []).length} subsections</small></div><button type="button" data-remove-inline-document="${esc(doc.id)}" data-class-id="${esc(classId)}">Remove</button></div>`).join('') : '<p class="small-note">No teaching documents have been uploaded.</p>';
+      container.innerHTML = docs.length ? docs.map(doc => {
+        const needsRefresh = doc.document_type === 'course_outline'
+          && !(doc.weekly_topics || []).length
+          && !(doc.sections || []).some(section => /^week\s+\d+/i.test(String(section.title || '')));
+        return `<div class="lecturer-document-row"><div><strong>${esc(doc.title || doc.filename)}</strong><small>${documentTypeLabel(doc.document_type)} • ${(doc.sections || []).length} sections</small>${needsRefresh ? '<small class="document-refresh-warning">Re-upload this outline once to rebuild its week-by-week topics and subtopics.</small>' : ''}</div><button type="button" data-remove-inline-document="${esc(doc.id)}" data-class-id="${esc(classId)}">Remove</button></div>`;
+      }).join('') : '<p class="small-note">No teaching documents have been uploaded.</p>';
       container.querySelectorAll('[data-remove-inline-document]').forEach(button => button.addEventListener('click', async () => {
         await deleteDocument(button.dataset.classId, button.dataset.removeInlineDocument, button);
         await loadLecturerDocumentSummary(classId);
@@ -616,11 +621,64 @@
   function portalDocumentTree(data) {
     const documents = data.documents || [];
     const weeklyPlan = data.weekly_plan || [];
-    const weekly = weeklyPlan.length ? `<section class="student-weekly-plan"><h3>Week-by-week activities</h3>${weeklyPlan.map((item, index) => `<article class="weekly-plan-card"><button type="button" class="student-course-card compact" data-portal-teach-section="${esc(item.id)}"><span><strong>${esc(item.title)}</strong><small>${item.generated ? 'Prepared from course objectives and expected outcomes' : `${(item.subunits || []).length} subunit${(item.subunits || []).length === 1 ? '' : 's'}`}</small></span><span>Learn ›</span></button>${(item.subunits || []).length ? `<div class="weekly-plan-subunits">${item.subunits.map(subunit => typeof subunit === 'string' ? `<span>${esc(subunit)}</span>` : `<button type="button" class="course-section-button" data-portal-teach-section="${esc(subunit.id)}"><span>${esc(subunit.title)}</span><small>${esc(subunit.section_path || '')}</small></button>`).join('')}</div>` : ''}</article>`).join('')}</section>` : '';
-    const docs = documents.map(doc => `<details class="course-document" ${doc.document_type === 'course_outline' ? 'open' : ''}><summary><span><strong>${esc(doc.title || doc.filename)}</strong><small>${documentTypeLabel(doc.document_type)}</small></span></summary><div class="course-section-tree">${(doc.sections || []).map(section => `<button type="button" class="course-section-button" data-portal-teach-section="${esc(section.id)}" style="--section-level:${Math.max(1, Number(section.level) || 1)}"><span>${esc(section.title)}</span><small>${esc(section.section_path || '')}</small></button>`).join('')}</div></details>`).join('');
+    const weekSectionIds = new Set();
+    weeklyPlan.forEach(item => {
+      if (item.id) weekSectionIds.add(String(item.id));
+      (item.subunits || []).forEach(subunit => {
+        if (typeof subunit === 'object' && subunit?.id) weekSectionIds.add(String(subunit.id));
+      });
+    });
+
+    const legacyOutlineNeedsRefresh = documents.some(doc => doc.document_type === 'course_outline'
+      && !(doc.weekly_topics || []).length
+      && !(doc.sections || []).some(section => /^week\s+\d+/i.test(String(section.title || ''))));
+    const refreshNotice = legacyOutlineNeedsRefresh ? '<div class="course-structure-warning"><strong>The course outline needs restructuring.</strong><span>The lecturer should re-upload the same outline once so its weeks, topics and subtopics can be displayed correctly.</span></div>' : '';
+
+    const weekly = weeklyPlan.length ? `
+      <section class="student-weekly-plan">
+        <div class="student-content-heading">
+          <div><span class="eyebrow">Course learning path</span><h3>Week-by-week topics and activities</h3></div>
+          <p>Choose a week or one of its subtopics for a detailed AI-guided lesson.</p>
+        </div>
+        ${weeklyPlan.map(item => {
+          const subunits = item.subunits || [];
+          const preparation = item.preparation || [];
+          return `<article class="weekly-plan-card">
+            <button type="button" class="student-course-card compact" data-portal-teach-section="${esc(item.id)}">
+              <span><strong>${esc(item.title)}</strong><small>${item.generated ? 'Prepared from course objectives and expected outcomes' : `${subunits.length} subtopic${subunits.length === 1 ? '' : 's'}`}</small></span>
+              <span>Start lesson ›</span>
+            </button>
+            ${subunits.length ? `<div class="weekly-plan-subunits"><p class="weekly-plan-label">Topics and subtopics</p>${subunits.map(subunit => typeof subunit === 'string'
+              ? `<span>${esc(subunit)}</span>`
+              : `<button type="button" class="course-section-button" data-portal-teach-section="${esc(subunit.id)}"><span>${esc(subunit.title)}</span><small>Open this subtopic</small></button>`).join('')}</div>` : ''}
+            ${preparation.length ? `<details class="weekly-preparation"><summary>Student preparation and activities</summary><ul>${preparation.map(item => `<li>${esc(item)}</li>`).join('')}</ul></details>` : ''}
+          </article>`;
+        }).join('')}
+      </section>` : '';
+
+    const noiseTitle = title => {
+      const clean = String(title || '').trim();
+      return !clean
+        || /^complete document$/i.test(clean)
+        || /^supporting table\s+\d+$/i.test(clean)
+        || /^table\s+\d+$/i.test(clean)
+        || /^4(?:\.0)?\s+course outline:?$/i.test(clean)
+        || /^20\d{2}\s*\/\s*20\d{2}.*semester$/i.test(clean);
+    };
+
+    const docs = documents.map(doc => {
+      const sections = (doc.sections || []).filter(section => !weekSectionIds.has(String(section.id)) && !noiseTitle(section.title));
+      if (!sections.length && doc.document_type === 'course_outline' && weeklyPlan.length) return '';
+      return `<details class="course-document" ${doc.document_type === 'course_outline' ? 'open' : ''}>
+        <summary><span><strong>${esc(doc.title || doc.filename)}</strong><small>${documentTypeLabel(doc.document_type)}</small></span></summary>
+        <div class="course-section-tree">${sections.length ? sections.map(section => `<button type="button" class="course-section-button" data-portal-teach-section="${esc(section.id)}" style="--section-level:${Math.max(1, Number(section.level) || 1)}"><span>${esc(section.title)}</span><small>${esc(section.section_path || '')}</small></button>`).join('') : '<p class="small-note">The week-by-week outline is displayed above.</p>'}</div>
+      </details>`;
+    }).join('');
+
     if (!weekly && !docs) return '<p class="small-note">No course plan or teaching material has been uploaded. Ask the lecturer to add course objectives or a course outline.</p>';
-    return weekly + docs;
+    return refreshNotice + weekly + docs;
   }
+
 
 
   async function openStudentCourse(classId) {

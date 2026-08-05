@@ -29,7 +29,7 @@
     try {
       const visual = state.visualPlan?.kind === 'image_annotation' ? null : state.visualPlan;
       const payload = {
-        version: '5.1.0',
+        version: '5.1.1',
         sessionId: state.sessionId,
         chatLog: state.chatLog.slice(-80),
         lastAnswer: state.lastAnswer,
