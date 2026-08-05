@@ -158,7 +158,7 @@ def test_health_reports_v5_portal_build():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["version"] == "5.1.0"
+    assert data["version"] == "5.1.1"
     assert data["live_video_enabled"] is False
     assert data["institutional_mode"] is True
     assert data["course_lock_enabled"] is True
@@ -183,8 +183,8 @@ def test_index_contains_v5_role_portals_and_two_whiteboards():
         'id="openDashboard"', 'id="classSelect"', 'id="outcomeSelect"', 'id="weekSelect"',
     ):
         assert identifier in html
-    assert '/static/portal.js?v=5.1.0' in html
-    assert '/static/practice_board.js?v=5.1.0' in html
+    assert '/static/portal.js?v=5.1.1' in html
+    assert '/static/practice_board.js?v=5.1.1' in html
     assert 'Administrator sign in' in html
     assert 'Lecturer sign in' in html
     assert 'Student sign in' in html
@@ -608,7 +608,7 @@ def test_service_worker_and_manifest_are_v5():
     assert manifest.status_code == 200
     assert worker.status_code == 200
     assert "Anovlad Institutional AI Tutor" in manifest.text
-    assert "anovlad-ai-tutor-v5-1-0-shell" in worker.text
+    assert "anovlad-ai-tutor-v5-1-1-shell" in worker.text
 
 
 def test_cost_aware_router_prefers_flash_for_normal_and_pro_for_advanced():
@@ -651,7 +651,7 @@ def test_v51_student_workspace_controls_are_present():
         'id="practiceFullscreen"', 'id="fullscreenBoard"',
     ):
         assert identifier in html
-    assert '/static/v2_1.js?v=5.1.0' in html
+    assert '/static/v2_1.js?v=5.1.1' in html
     css = client.get('/static/styles.css').text
     assert 'body.student-interface' in css
     assert '.practice-whiteboard-wrap:fullscreen' in css
@@ -759,3 +759,96 @@ def test_course_without_readings_generates_weekly_lessons_from_outcomes():
     assert data["sources"] == ["Lecturer course objectives, expected outcomes and weekly plan"]
     assert data["visual"]["kind"] == "slides"
     assert data["answer"]
+
+
+def period_based_operations_outline_docx_bytes():
+    output = BytesIO()
+    document = Document()
+    document.add_paragraph("2025/2026 FIRST SEMESTER")
+    info = document.add_table(rows=2, cols=2)
+    info.rows[0].cells[0].text = "Name of Lecturer(s)"
+    info.rows[0].cells[1].text = "Lecturer Name"
+    info.rows[1].cells[0].text = "Course Code/ Title"
+    info.rows[1].cells[1].text = "SBU301: Operations Management"
+    document.add_paragraph("2.0 Course Description:")
+    document.add_paragraph("The course develops understanding of operations as a core business function.")
+    document.add_paragraph("3.0 Course Objectives:")
+    document.add_paragraph("This course enables students to:")
+    document.add_paragraph("acquire knowledge in operations strategy and organisational competitiveness.", style="List Paragraph")
+    document.add_paragraph("use quantitative approaches to make operations decisions.", style="List Paragraph")
+    document.add_paragraph("3.0 Course Outcomes:")
+    document.add_paragraph("Use equations and statistics in operations analysis", style="List Paragraph")
+    document.add_heading("4.0 Course Outline", level=3)
+    table = document.add_table(rows=1, cols=3)
+    table.rows[0].cells[0].text = "Period"
+    table.rows[0].cells[1].text = "Topics"
+    table.rows[0].cells[2].text = "Student’s Preparation"
+    rows = [
+        (
+            "One",
+            ["Introduction to operations management", "meaning of operations management", "why study OM", "what operations managers do"],
+            ["Read chapter 1", "Prepare an analysis of how operations, marketing and finance are related."],
+        ),
+        (
+            "Two",
+            ["Operations strategy in a global environment", "developing missions and strategies", "achieving competitive advantage through operations"],
+            ["Read pages 68-96", "Analyse the mission and strategy of an organisation."],
+        ),
+    ]
+    for period, topics, preparation in rows:
+        cells = table.add_row().cells
+        cells[0].text = period
+        cells[1].text = topics[0]
+        for item in topics[1:]:
+            cells[1].add_paragraph(item, style="List Paragraph")
+        cells[2].text = preparation[0]
+        for item in preparation[1:]:
+            cells[2].add_paragraph(item)
+    document.save(output)
+    return output.getvalue()
+
+
+def test_period_topics_preparation_outline_exposes_weeks_subtopics_and_activities():
+    lecturer, _ = lecturer_account()
+    classroom = create_course(lecturer, name="Operations Management")
+    upload = client.post(
+        "/api/materials/upload",
+        headers=headers(lecturer),
+        data={"class_id": classroom["id"], "document_type": "course_outline"},
+        files=[(
+            "files",
+            (
+                "Course Outline Operations Management.docx",
+                period_based_operations_outline_docx_bytes(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ),
+        )],
+    )
+    assert upload.status_code == 200, upload.text
+    uploaded = upload.json()["uploaded"][0]
+    assert uploaded["weekly_topics_found"] == 2
+    assert uploaded["objectives_found"] >= 3
+
+    student = student_account()
+    enrol(student, classroom)
+    structure = client.get(
+        f"/api/classes/{classroom['id']}/course-structure",
+        headers=headers(student),
+    )
+    assert structure.status_code == 200, structure.text
+    data = structure.json()
+    assert data["documents"][0]["title"] == "SBU301: Operations Management"
+    plan = data["weekly_plan"]
+    assert [item["title"] for item in plan] == [
+        "Week 1: Introduction to operations management",
+        "Week 2: Operations strategy in a global environment",
+    ]
+    assert [item["title"] for item in plan[0]["subunits"]] == [
+        "meaning of operations management",
+        "why study OM",
+        "what operations managers do",
+    ]
+    assert plan[0]["preparation"] == [
+        "Read chapter 1",
+        "Prepare an analysis of how operations, marketing and finance are related.",
+    ]
