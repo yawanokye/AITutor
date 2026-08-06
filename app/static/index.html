@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0b5d4b" />
   <link rel="manifest" href="/static/manifest.webmanifest" />
   <title>AI Tutor</title>
-  <link rel="stylesheet" href="/static/styles.css?v=5.3.0" />
+  <link rel="stylesheet" href="/static/styles.css?v=5.4.0" />
   <script>
     window.MathJax = {
       tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
@@ -369,6 +369,16 @@
             </div>
           </div>
 
+          <div class="lesson-interaction-bar" aria-label="Lesson interaction controls">
+            <span>During the lesson</span>
+            <button type="button" data-lesson-followup="Explain the current idea more simply, using everyday language and a familiar example.">Explain more simply</button>
+            <button type="button" data-lesson-followup="Give me another example of the current idea, different from the one already used.">Another example</button>
+            <button type="button" data-lesson-followup="Show the calculation or procedure for the current idea step by step on the whiteboard.">Show the working</button>
+            <button type="button" data-lesson-followup="Explain why the current idea is important and where it is applied.">Why is this important?</button>
+            <button type="button" data-lesson-followup="Pause the teaching and test my understanding of the current idea before continuing. Do not reveal the answer until I attempt it.">Test me now</button>
+            <button id="repeatLastExplanation" type="button">Repeat explanation</button>
+          </div>
+
           <div class="tutor-strip">
             <div class="mini-avatar-stage">
               <div id="visualTutor" class="visual-tutor" aria-label="Animated AI tutor">
@@ -466,10 +476,10 @@
   </dialog>
 
   <div class="sidebar-backdrop hidden" id="sidebarBackdrop"></div>
-  <script src="/static/portal.js?v=5.3.0"></script>
-  <script src="/static/app.js?v=5.3.0"></script>
-  <script src="/static/v2_1.js?v=5.3.0"></script>
-  <script src="/static/practice_board.js?v=5.3.0"></script>
+  <script src="/static/portal.js?v=5.4.0"></script>
+  <script src="/static/app.js?v=5.4.0"></script>
+  <script src="/static/v2_1.js?v=5.4.0"></script>
+  <script src="/static/practice_board.js?v=5.4.0"></script>
   <script>if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/static/service-worker.js').catch(() => {}));</script>
 </body>
 </html>

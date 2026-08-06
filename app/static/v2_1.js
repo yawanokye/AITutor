@@ -30,7 +30,7 @@
     try {
       const visual = state.visualPlan?.kind === 'image_annotation' ? null : state.visualPlan;
       const payload = {
-        version: '5.3.0',
+        version: '5.4.0',
         sessionId: state.sessionId,
         chatLog: state.chatLog.slice(-80),
         lastAnswer: state.lastAnswer,
@@ -1192,6 +1192,7 @@
       el('practicePanel').classList.add('hidden');
     }, 0);
   });
+  window.aiTutorStopTeaching = () => stopStepTeaching(false);
   window.addEventListener('beforeunload', saveWorkspace);
 
   el('teachVisual').disabled = true;

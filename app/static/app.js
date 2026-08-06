@@ -256,6 +256,15 @@ async function sendQuestion() {
   }
 }
 
+async function askFollowUp(prompt) {
+  window.aiTutorStopTeaching?.();
+  const text = String(prompt || '').trim();
+  if (!text) return;
+  question.value = text;
+  question.focus();
+  await sendQuestion();
+}
+
 async function speakText(text) {
   if (!state.config?.openai_enabled) {
     setStatus('Voice output needs OPENAI_API_KEY to be configured.');
@@ -1138,6 +1147,8 @@ document.querySelectorAll('.starter').forEach(button => button.addEventListener(
   question.value = button.dataset.prompt;
   question.focus();
 }));
+document.querySelectorAll('[data-lesson-followup]').forEach(button => button.addEventListener('click', () => askFollowUp(button.dataset.lessonFollowup)));
+el('repeatLastExplanation')?.addEventListener('click', () => state.lastAudioUrl ? audioPlayer.play() : (state.lastAnswer ? speakText(state.lastAnswer) : setStatus('No explanation is available to repeat.')));
 
 const sidebar = el('sidebar');
 const backdrop = el('sidebarBackdrop');
@@ -1173,6 +1184,8 @@ window.aiTutorRenderVisual = renderVisual;
 window.aiTutorSetMobileView = setMobileView;
 window.aiTutorSetStatus = setStatus;
 window.aiTutorVisualPlanToSpeech = visualPlanToSpeech;
+window.aiTutorAskFollowUp = askFollowUp;
+window.aiTutorLastAnswer = () => state.lastAnswer;
 el('deliveryMode')?.addEventListener('change', event => applyDeliveryMode(event.target.value));
 el('classSelect')?.addEventListener('change', () => { window.aiTutorClassChanged?.(); loadMaterials(); });
 
