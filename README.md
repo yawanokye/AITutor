@@ -1,4 +1,12 @@
-# Anovlad Institutional AI Tutor v5.4.0
+# Anovlad Institutional AI Tutor v5.5.0
+
+## v5.5 lesson continuity and course chat memory
+
+Version 5.5 keeps the active teaching presentation intact when a learner asks a question. The lecture pauses at the current audio time and slide, opens a focused question window, answers within the exact course, week, section and slide context, then resumes from the same point.
+
+It also creates a separate tutor conversation memory for every course. Students can switch between enrolled courses without one course contaminating another. The Learning memory tab can clear the current course conversation or all course chat memories without deleting enrolment, grades, mastery, assessments, notes or bookmarks.
+
+Student-facing slides are cleaned before display. Internal production statements such as claims that slides are linked to detailed notes are removed. Week labels, period labels, slide numbers, section numbers and list numbering are stripped from key-idea and key-term cards.
 
 A Render-ready, role-based AI learning platform for institutions. Administration, teaching and learning use dedicated portals, while lecturer-approved course documents become a structured, selectable AI tutoring environment.
 
@@ -251,7 +259,7 @@ This release uses the existing Render PostgreSQL database. It does not create a 
 6. Add or confirm the environment variables below.
 7. Select **Manual Deploy**, then **Clear build cache and deploy**.
 8. Wait until the service is Live.
-9. Open `/health` and confirm version `5.4.0`.
+9. Open `/health` and confirm version `5.5.0`.
 10. Refresh the browser with `Ctrl + Shift + R`.
 
 Expected health fields include:
@@ -259,7 +267,7 @@ Expected health fields include:
 ```json
 {
   "status": "ok",
-  "version": "5.4.0",
+  "version": "5.5.0",
   "administrator_portal_enabled": true,
   "lecturer_managed_enrolment": true,
   "structured_course_content_enabled": true,

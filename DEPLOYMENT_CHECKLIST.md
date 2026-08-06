@@ -51,7 +51,7 @@ Keep the current variables. No new v5.4 variable is required.
 - [ ] Select **Clear build cache and deploy**.
 - [ ] Wait until the service is **Live**.
 - [ ] Open `https://anovlad-ai-tutor.onrender.com/health`.
-- [ ] Confirm `version` is `5.4.0`.
+- [ ] Confirm `version` is `5.5.0`.
 - [ ] Confirm the diagnostic, pathway, assessment, remediation, revision, notes, integrity and accessibility flags are `true`.
 
 ## 4. Browser refresh
@@ -108,3 +108,16 @@ The following tables are created automatically:
 - [ ] Pilot diagnostics and mastery thresholds with representative lecturers before applying them widely.
 - [ ] Review AI-generated draft questions before publication.
 - [ ] Treat mastery certificates as learning evidence generated from the app, not as official University awards unless formally approved.
+
+## v5.5 lesson continuity checks
+
+- [ ] During an active guided lecture, select **Ask about this point**.
+- [ ] Confirm the slide remains visible behind the popup and the main lecture audio pauses.
+- [ ] Ask a question during a Week 2 lesson and confirm the response refers to the active Week 2 section, not an earlier week.
+- [ ] Confirm the clarification uses the separate popup audio player.
+- [ ] Select **Continue lesson** and confirm the original audio resumes from the same position.
+- [ ] Switch between two enrolled courses and confirm each restores a separate conversation and visual workspace.
+- [ ] Open **Learning memory** and clear the current course memory.
+- [ ] Confirm assessment scores, mastery, notes and enrolment remain unchanged.
+- [ ] Confirm slides do not display statements about being linked to detailed notes.
+- [ ] Confirm key-idea cards do not include week labels or numbering.
