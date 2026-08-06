@@ -92,7 +92,7 @@ logger = logging.getLogger("ai_tutor")
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title=settings.app_name, version="5.4.0")
+app = FastAPI(title=settings.app_name, version="5.5.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -522,10 +522,70 @@ def _demo_visual(message: str, has_image: bool) -> VisualPlan:
     )
 
 
+
+_INTERNAL_VISUAL_SENTENCE_PATTERNS = (
+    re.compile(r"\b(?:this|the|these)\s+(?:presentation|slide(?:s| deck)?|visual(?: explanation)?|whiteboard)\s+(?:is|are|has been|have been)\s+(?:linked|aligned|connected|based)\s+(?:to|with|on)\s+(?:the\s+)?detailed\s+(?:note|notes|teaching notes)\b", re.I),
+    re.compile(r"\b(?:refer|return|go back)\s+to\s+(?:the\s+)?detailed\s+(?:note|notes|teaching notes)\b", re.I),
+    re.compile(r"\b(?:the\s+)?(?:presentation|slides?|visual)\s+(?:follows|mirrors)\s+(?:the\s+)?detailed\s+(?:note|notes|teaching notes)\b", re.I),
+)
+
+_TEACHING_LABEL_PREFIX = re.compile(
+    r"^\s*(?:(?:week|period|session|teaching\s+week|slide|section)\s*"
+    r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)"
+    r"\s*[:.)\-–—]*\s*|\d+(?:\.\d+)*(?:\s*[:.)\-–—]\s*|\s+))",
+    re.I,
+)
+
+
+def _clean_student_visual_text(value: Any) -> str:
+    """Remove production notes that should never be taught to the learner."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    kept: list[str] = []
+    for sentence in sentences:
+        if any(pattern.search(sentence) for pattern in _INTERNAL_VISUAL_SENTENCE_PATTERNS):
+            continue
+        cleaned = sentence
+        for pattern in _INTERNAL_VISUAL_SENTENCE_PATTERNS:
+            cleaned = pattern.sub("", cleaned)
+        cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" -–—,.;")
+        if cleaned:
+            kept.append(cleaned)
+    return " ".join(kept).strip()
+
+
+def _clean_key_idea(value: Any) -> str:
+    text = _clean_student_visual_text(value)
+    previous = None
+    while text and text != previous:
+        previous = text
+        text = _TEACHING_LABEL_PREFIX.sub("", text).strip()
+    if re.fullmatch(r"(?:week|period|session|slide|section)?\s*\d+", text, flags=re.I):
+        return ""
+    return text
+
+
 def _normalise_visual_plan(plan: VisualPlan | None, *, has_image: bool) -> VisualPlan | None:
     if plan is None:
         return None
     data = plan.model_dump()
+
+    # Keep internal production instructions and timetable labels out of student-facing teaching.
+    data["title"] = _clean_student_visual_text(data.get("title", ""))
+    data["caption"] = _clean_student_visual_text(data.get("caption", ""))
+    cleaned_slides: list[dict[str, Any]] = []
+    for slide in data.get("slides", [])[:20]:
+        cleaned = dict(slide)
+        cleaned["title"] = _clean_student_visual_text(cleaned.get("title", ""))
+        cleaned["bullets"] = [item for item in (_clean_key_idea(value) for value in cleaned.get("bullets", [])) if item][:9]
+        cleaned["key_terms"] = [item for item in (_clean_key_idea(value) for value in cleaned.get("key_terms", [])) if item][:10]
+        for field in ("explanation", "worked_example", "check_question", "speaker_note"):
+            cleaned[field] = _clean_student_visual_text(cleaned.get(field, ""))
+        cleaned_slides.append(cleaned)
+    data["slides"] = cleaned_slides
 
     # Clamp and clean image boxes so they always remain on the normalised board.
     cleaned_annotations: list[dict[str, Any]] = []
@@ -691,6 +751,10 @@ async def health() -> dict[str, Any]:
         "student_notes_bookmarks_enabled": True,
         "academic_integrity_controls_enabled": True,
         "accessibility_controls_enabled": True,
+        "lesson_interruption_resume_enabled": True,
+        "course_scoped_chat_memory_enabled": True,
+        "student_memory_controls_enabled": True,
+        "student_facing_visual_cleanup_enabled": True,
     }
 
 
@@ -738,6 +802,8 @@ async def chat(
     visual_requested: bool = Form(default=True),
     visual_preference: str = Form(default="auto"),
     board_context: str = Form(default=""),
+    lesson_context: str = Form(default=""),
+    follow_up_during_lesson: bool = Form(default=False),
     image: UploadFile | None = File(default=None),
     board_image: UploadFile | None = File(default=None),
 ) -> ChatResponse:
@@ -761,10 +827,23 @@ async def chat(
         raise HTTPException(status_code=413, detail="The question is too long. Keep it below 8,000 characters.")
     if len(board_context) > 16000:
         raise HTTPException(status_code=413, detail="The whiteboard context is too large.")
+    if len(lesson_context) > 20000:
+        raise HTTPException(status_code=413, detail="The active lesson context is too large.")
 
     visual_preference = visual_preference if visual_preference in VISUAL_PREFERENCES else "auto"
     session_id = session_id.strip() or str(uuid.uuid4())
     history = sessions[session_id]
+    if user and not history:
+        try:
+            persisted_history = await run_in_threadpool(
+                accounts.chat_history,
+                session_id=session_id,
+                user_id=str(user["id"]),
+                limit=max(settings.history_turns * 2, 4),
+            )
+            history.extend(persisted_history)
+        except Exception:
+            logger.exception("Persisted course chat history could not be restored")
 
     learner_image = await _read_image(image, label="Learner-uploaded image or photograph")
     whiteboard_image = await _read_image(board_image, label="Current digital whiteboard snapshot with learner annotations")
@@ -838,13 +917,21 @@ async def chat(
         if vision_analysis is not None:
             vision_section = f"\n\nVERIFIED IMAGE ANALYSIS\n{ai_router.vision_context(vision_analysis)}"
         board_section = f"\n\nCURRENT WHITEBOARD CONTEXT\n{board_context[:12000]}" if board_context.strip() else ""
+        lesson_section = f"\n\nACTIVE LESSON CONTEXT\n{lesson_context[:18000]}" if lesson_context.strip() else ""
+        lesson_follow_up_rule = (
+            "\n\nACTIVE-LESSON FOLLOW-UP RULE\n"
+            "The learner interrupted the currently displayed lesson. Treat ACTIVE LESSON CONTEXT as authoritative. "
+            "Answer the learner's exact request about the active topic and slide. If earlier chat history refers to another week, topic or slide, ignore that conflicting reference. "
+            "Do not restart, replace or redesign the presentation. Give a focused explanation that allows the same lesson to resume immediately."
+            if follow_up_during_lesson else ""
+        )
         prompt = (
             f"APPROVED COURSE CONTEXT\n{context}\n\n"
             f"KNOWLEDGE MODE\n{learning['knowledge_mode']}\n\n"
             f"LEARNING OUTCOME\n{learning['learning_outcome'] or 'Not selected'}\n\n"
             f"WEEKLY TOPIC\n{learning['weekly_topic'] or 'Not selected'}\n\n"
             f"LEARNER QUESTION\n{effective_message}"
-            f"{vision_section}{board_section}"
+            f"{lesson_section}{lesson_follow_up_rule}{vision_section}{board_section}"
         )
         try:
             result = await run_in_threadpool(
@@ -2827,13 +2914,14 @@ async def teach_course_section(request: Request, section_id: str, payload: Secti
             slide.check_question = ""
 
     answer = _section_plan_answer(plan)
-    visual = VisualPlan(
-        kind="slides",
-        title=plan.title,
-        caption=(
-            "Complete teaching slides aligned with the detailed notes. Each slide includes the explanation and narration needed to learn directly from the whiteboard."
+    visual = _normalise_visual_plan(
+        VisualPlan(
+            kind="slides",
+            title=plan.title,
+            caption="Follow the explanation while important ideas, examples and equations appear on the teaching board.",
+            slides=plan.slides,
         ),
-        slides=plan.slides,
+        has_image=False,
     )
     try:
         await run_in_threadpool(
@@ -3080,6 +3168,15 @@ async def delete_course_document(request: Request, class_id: str, document_id: s
 
 
 @app.delete("/api/session/{session_id}")
-async def clear_session(session_id: str) -> dict[str, bool]:
+async def clear_session(request: Request, session_id: str) -> dict[str, Any]:
     sessions.pop(session_id, None)
-    return {"cleared": True}
+    user = _optional_user(request)
+    deleted_persistent = False
+    if user:
+        try:
+            deleted_persistent = await run_in_threadpool(
+                accounts.delete_chat_session, session_id=session_id, user_id=str(user["id"])
+            )
+        except Exception:
+            logger.exception("Persistent course chat memory could not be deleted")
+    return {"cleared": True, "persistent_memory_deleted": deleted_persistent}

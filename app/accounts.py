@@ -764,6 +764,57 @@ class AccountStore:
             )
             conn.commit()
 
+    def chat_history(self, *, session_id: str, user_id: str, limit: int = 24) -> list[dict[str, str]]:
+        """Return a learner's recent messages for one course-scoped conversation."""
+        limit = max(2, min(int(limit), 100))
+        if self._use_postgres:
+            with self._pg() as conn, conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT m.role,m.content FROM ai_tutor_chat_messages m
+                    JOIN ai_tutor_chat_sessions s ON s.id=m.session_id
+                    WHERE m.session_id=%s AND s.user_id=%s
+                    ORDER BY m.created_at DESC LIMIT %s
+                    """,
+                    (session_id, user_id, limit),
+                )
+                rows = [dict(row) for row in cur.fetchall()]
+        else:
+            with self._lock, self._sqlite() as conn:
+                rows = [dict(row) for row in conn.execute(
+                    """
+                    SELECT m.role,m.content FROM ai_tutor_chat_messages m
+                    JOIN ai_tutor_chat_sessions s ON s.id=m.session_id
+                    WHERE m.session_id=? AND s.user_id=?
+                    ORDER BY m.created_at DESC LIMIT ?
+                    """,
+                    (session_id, user_id, limit),
+                ).fetchall()]
+        rows.reverse()
+        return [
+            {"role": str(row.get("role", "")), "content": str(row.get("content", ""))}
+            for row in rows if str(row.get("role", "")) in {"user", "assistant"}
+        ]
+
+    def delete_chat_session(self, *, session_id: str, user_id: str) -> bool:
+        """Delete one authenticated learner's persisted course conversation and its messages."""
+        if self._use_postgres:
+            with self._pg() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM ai_tutor_chat_sessions WHERE id=%s AND user_id=%s",
+                    (session_id, user_id),
+                )
+                deleted = cur.rowcount > 0
+                conn.commit()
+                return deleted
+        with self._lock, self._sqlite() as conn:
+            cur = conn.execute(
+                "DELETE FROM ai_tutor_chat_sessions WHERE id=? AND user_id=?",
+                (session_id, user_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
     def add_chat_message(
         self, *, session_id: str, role: str, content: str, sources: list[str] | None = None,
         provider: str = "", model: str = ""

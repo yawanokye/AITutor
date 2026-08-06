@@ -109,12 +109,14 @@ Rules:
 4. When a topic contains several ideas, divide it into a logical sequence of subtopics even when the original course outline does not list every subtopic. The sequence must build complete understanding.
 5. For steps, use up to 14 steps. Each step needs a full explanation, any equation, a narration that can stand alone, and a learner prompt where useful.
 6. For slides, use six to eighteen slides. Every slide must include a meaningful explanation and detailed speaker_note. Add a worked example, key terms and a check question where relevant. Bullets should organise the teaching, not replace it.
-7. For equations, return LaTeX without surrounding dollar signs. Define symbols before using them and show substitutions clearly.
-8. Graph x and y values must be numeric. Sort points by x when a line should connect them.
-9. Diagram node positions use a 1000 by 1000 board. Keep nodes away from the outer 70 units.
-10. Table rows should match the number of headers.
-11. The caption should tell the learner how to use the visual and what understanding they should gain.
-12. Use empty arrays for fields that do not apply. Choose none rather than inventing data, quotations or coordinates.
+7. Never expose production instructions to the learner. Do not write that the presentation, slides or whiteboard are linked, aligned or connected to detailed notes. Simply teach the content.
+8. Key ideas and key terms must contain concepts only. Do not prefix them with week numbers, period labels, slide numbers, section numbers or list numbering.
+9. For equations, return LaTeX without surrounding dollar signs. Define symbols before using them and show substitutions clearly.
+10. Graph x and y values must be numeric. Sort points by x when a line should connect them.
+11. Diagram node positions use a 1000 by 1000 board. Keep nodes away from the outer 70 units.
+12. Table rows should match the number of headers.
+13. The caption should tell the learner how to use the visual and what understanding they should gain.
+14. Use empty arrays for fields that do not apply. Choose none rather than inventing data, quotations or coordinates.
 """.strip()
 
 
@@ -215,10 +217,12 @@ Rules:
 5. Address common misconceptions and explain why incorrect interpretations fail.
 6. For quantitative or procedural topics, show complete worked examples step by step, define symbols, substitute values and verify the result.
 7. Each slide must teach at the same depth as the written notes. Do not make the slides shorter or less informative than the notes. Every slide needs a substantial explanation and detailed speaker_note. Add worked examples, equations, key terms and check questions where relevant.
-8. Organise long lessons across enough slides rather than crowding or summarising. The visual whiteboard should be usable as the main teaching medium.
-9. Do not invent numerical data, quotations, page numbers, references or claims attributed to uploaded readings.
-10. Use British English and readable language appropriate to the learner's level.
-11. End with an integrated summary and self-check questions. Do not provide self-check answers unless the lesson format requires worked feedback.
-12. Return valid JSON matching the requested schema.
+8. Do not place production notes in student-facing content. Never say that the presentation, slides or whiteboard are linked, aligned or connected to detailed notes. Teach the content directly.
+9. Key ideas and key terms must be concepts only. Do not include week labels, period labels, slide numbers, section numbers or list numbering in them.
+10. Organise long lessons across enough slides rather than crowding or summarising. The visual whiteboard should be usable as the main teaching medium.
+11. Do not invent numerical data, quotations, page numbers, references or claims attributed to uploaded readings.
+12. Use British English and readable language appropriate to the learner's level.
+13. End with an integrated summary and self-check questions. Do not provide self-check answers unless the lesson format requires worked feedback.
+14. Return valid JSON matching the requested schema.
 """.strip()
 
