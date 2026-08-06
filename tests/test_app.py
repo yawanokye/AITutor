@@ -159,7 +159,7 @@ def test_health_reports_v5_portal_build():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["version"] == "5.3.0"
+    assert data["version"] == "5.4.0"
     assert data["live_video_enabled"] is False
     assert data["institutional_mode"] is True
     assert data["course_lock_enabled"] is True
@@ -184,8 +184,8 @@ def test_index_contains_v5_role_portals_and_two_whiteboards():
         'id="openDashboard"', 'id="classSelect"', 'id="outcomeSelect"', 'id="weekSelect"',
     ):
         assert identifier in html
-    assert '/static/portal.js?v=5.3.0' in html
-    assert '/static/practice_board.js?v=5.3.0' in html
+    assert '/static/portal.js?v=5.4.0' in html
+    assert '/static/practice_board.js?v=5.4.0' in html
     assert 'Administrator sign in' in html
     assert 'Lecturer sign in' in html
     assert 'Student sign in' in html
@@ -423,8 +423,8 @@ def test_index_exposes_pause_control_and_capture_status():
     html = client.get("/").text
     assert 'id="pauseTeaching"' in html
     assert 'id="practiceCaptureStatus"' in html
-    assert '/static/v2_1.js?v=5.3.0' in html
-    assert '/static/practice_board.js?v=5.3.0' in html
+    assert '/static/v2_1.js?v=5.4.0' in html
+    assert '/static/practice_board.js?v=5.4.0' in html
 
 
 
@@ -652,7 +652,7 @@ def test_service_worker_and_manifest_are_v5():
     assert manifest.status_code == 200
     assert worker.status_code == 200
     assert "Anovlad Institutional AI Tutor" in manifest.text
-    assert "anovlad-ai-tutor-v5-3-0-shell" in worker.text
+    assert "anovlad-ai-tutor-v5-4-0-shell" in worker.text
 
 
 def test_cost_aware_router_prefers_flash_for_normal_and_pro_for_advanced():
@@ -695,7 +695,7 @@ def test_v51_student_workspace_controls_are_present():
         'id="practiceFullscreen"', 'id="fullscreenBoard"',
     ):
         assert identifier in html
-    assert '/static/v2_1.js?v=5.3.0' in html
+    assert '/static/v2_1.js?v=5.4.0' in html
     css = client.get('/static/styles.css').text
     assert 'body.student-interface' in css
     assert '.practice-whiteboard-wrap:fullscreen' in css
@@ -927,3 +927,287 @@ def test_frontend_uses_continuous_guided_lecture_audio_and_progressive_popups():
     assert "data-lecture-cue" in app_js
     assert "lecture-revealed" in css
     assert "lecture-notes-panel" in css
+
+
+def test_v54_health_and_frontend_expose_complete_learning_cycle():
+    health = client.get('/health').json()
+    assert health['version'] == '5.4.0'
+    for key in (
+        'diagnostic_mastery_engine_enabled', 'personalised_learning_paths_enabled',
+        'lecturer_assessment_manager_enabled', 'intelligent_remediation_enabled',
+        'spaced_revision_enabled', 'student_notes_bookmarks_enabled',
+        'academic_integrity_controls_enabled', 'accessibility_controls_enabled',
+    ):
+        assert health[key] is True
+    html = client.get('/').text
+    assert '/static/portal.js?v=5.4.0' in html
+    assert 'data-lesson-followup=' in html
+    assert 'id="repeatLastExplanation"' in html
+    portal = client.get('/static/portal.js').text
+    for marker in ('Your personalised learning home', 'Assessment and question bank', 'Due for review', 'My notes and bookmarks', 'Remedial lesson'):
+        assert marker in portal
+
+
+def test_entry_diagnostic_personalised_path_mastery_and_revision_cycle():
+    lecturer, _ = lecturer_account('Diagnostic Lecturer')
+    classroom = create_course(
+        lecturer,
+        name='Diagnostic Learning Course',
+        weekly_topics=['Foundations', 'Applications'],
+        outcomes=['Explain the foundations', 'Apply the core method'],
+    )
+    student = student_account('Diagnostic Student')
+    enrol(student, classroom)
+
+    dashboard = client.get('/api/dashboard', headers=headers(student))
+    assert dashboard.status_code == 200, dashboard.text
+    data = dashboard.json()
+    diagnostics = [item for item in data['assessments'] if item['assessment_type'] == 'diagnostic']
+    assert diagnostics
+    assert data['next_recommended_action']['type'] == 'diagnostic'
+    assert data['learning_paths'][0]['diagnostic_required'] is True
+
+    started = client.post(f"/api/assessments/{diagnostics[0]['id']}/start", headers=headers(student))
+    assert started.status_code == 200, started.text
+    attempt = started.json()
+    questions = attempt['assessment']['questions']
+    assert questions
+    assert all('expected_answer' not in question for question in questions)
+    responses = [
+        {'question_id': question['id'], 'answer': 'I understand the main idea, can define the concept accurately, and can give a relevant practical example that shows how it is applied.', 'mode': 'typed'}
+        for question in questions
+    ]
+    submitted = client.post(
+        f"/api/assessment-attempts/{attempt['attempt_id']}/submit",
+        headers=headers(student),
+        json={'responses': responses, 'hints_used': 0},
+    )
+    assert submitted.status_code == 200, submitted.text
+    result = submitted.json()
+    assert result['score'] >= 0
+    assert result['next_action']
+
+    refreshed = client.get('/api/dashboard', headers=headers(student)).json()
+    assert refreshed['learning_paths'][0]['diagnostic_required'] is False
+    assert refreshed['mastery_records']
+    assert refreshed['reviews_due']
+    assert refreshed['next_recommended_action']['type'] in {'revision', 'lesson', 'course_complete'}
+
+
+def test_lecturer_can_generate_edit_publish_and_student_complete_assessment():
+    lecturer, _ = lecturer_account('Assessment Lecturer')
+    classroom = create_course(
+        lecturer,
+        name='Assessment Design Course',
+        weekly_topics=['Demand forecasting'],
+        outcomes=['Apply a forecasting method'],
+    )
+    draft = client.post(
+        f"/api/classes/{classroom['id']}/assessments/draft",
+        headers=headers(lecturer),
+        json={'assessment_type': 'quiz', 'topic': 'Demand forecasting', 'learning_outcome': 'Apply a forecasting method', 'question_count': 3, 'difficulty': 'mixed'},
+    )
+    assert draft.status_code == 200, draft.text
+    item = draft.json()
+    assert item['status'] == 'draft'
+    assert len(item['questions']) == 3
+    item['title'] = 'Lecturer-reviewed forecasting quiz'
+    item['instructions'] = 'Show the reasoning behind each answer.'
+    item['settings'] = {
+        'attempts_allowed': 2, 'hints_allowed': True, 'reveal_answers': True,
+        'pass_mark': 65, 'contributes_to_mastery': True,
+        'integrity_mode': 'graded', 'deadline_enforced': False,
+    }
+    item['status'] = 'published'
+    updated = client.patch(f"/api/assessments/{item['id']}", headers=headers(lecturer), json=item)
+    assert updated.status_code == 200, updated.text
+    assert updated.json()['title'] == 'Lecturer-reviewed forecasting quiz'
+    assert updated.json()['settings']['attempts_allowed'] == 2
+
+    student = student_account('Assessment Student')
+    enrol(student, classroom)
+    listed = client.get(f"/api/classes/{classroom['id']}/assessments", headers=headers(student))
+    assert listed.status_code == 200
+    quiz = next(row for row in listed.json() if row['id'] == item['id'])
+    assert all('marking_guide' not in question for question in quiz['questions'])
+    attempt = client.post(f"/api/assessments/{item['id']}/start", headers=headers(student)).json()
+    responses = [{'question_id': question['id'], 'answer': 'This answer explains the method, identifies the relevant variables, applies the steps and gives a practical example.', 'mode': 'typed'} for question in attempt['assessment']['questions']]
+    completed = client.post(f"/api/assessment-attempts/{attempt['attempt_id']}/submit", headers=headers(student), json={'responses': responses, 'hints_used': 0})
+    assert completed.status_code == 200, completed.text
+    assert 'mastery' in completed.json()
+
+
+def test_student_notes_are_private_and_revision_sheet_is_available():
+    lecturer, _ = lecturer_account('Notes Lecturer')
+    classroom = create_course(lecturer, name='Notes Course')
+    student_one = student_account('Notes Student One')
+    student_two = student_account('Notes Student Two')
+    enrol(student_one, classroom)
+    enrol(student_two, classroom)
+    created = client.post('/api/student/notes', headers=headers(student_one), json={
+        'class_id': classroom['id'], 'section_id': 'week-1', 'note_type': 'bookmark',
+        'title': 'Important definition', 'content': 'My private summary of the definition.', 'metadata': {},
+    })
+    assert created.status_code == 200, created.text
+    note = created.json()
+    own = client.get('/api/student/notes', headers=headers(student_one)).json()
+    other = client.get('/api/student/notes', headers=headers(student_two)).json()
+    assert any(item['id'] == note['id'] for item in own)
+    assert all(item['id'] != note['id'] for item in other)
+    sheet = client.get(f"/api/student/revision-sheet?class_id={classroom['id']}", headers=headers(student_one))
+    assert sheet.status_code == 200
+    assert 'Important definition' in sheet.text
+    deleted = client.delete(f"/api/student/notes/{note['id']}", headers=headers(student_one))
+    assert deleted.status_code == 200
+
+
+def test_course_learning_and_integrity_policy_is_exposed_to_enrolled_students():
+    lecturer, _ = lecturer_account('Integrity Lecturer')
+    classroom = create_course(lecturer, name='Integrity Course')
+    payload = {
+        'name': classroom['name'], 'subject': classroom['subject'], 'knowledge_mode': 'course_only',
+        'learning_outcomes': ['Explain ethical use of AI'], 'weekly_topics': ['Academic integrity'],
+        'recommended_readings': [], 'tutor_instructions': 'Use hints before direct answers.',
+        'practice_whiteboard_required': False, 'practice_response_mode': 'student_choice',
+        'diagnostics_required': True, 'spaced_revision_enabled': True, 'mastery_pass_mark': 75,
+        'direct_answers_allowed': False, 'hints_allowed': True,
+        'assignment_help_mode': 'teach_only', 'integrity_mode': 'hint_only',
+    }
+    updated = client.patch(f"/api/classes/{classroom['id']}/profile", headers=headers(lecturer), json=payload)
+    assert updated.status_code == 200, updated.text
+    student = student_account('Integrity Student')
+    joined = enrol(student, updated.json())
+    assert joined['direct_answers_allowed'] is False
+    assert joined['assignment_help_mode'] == 'teach_only'
+    assert joined['integrity_mode'] == 'hint_only'
+    assert joined['mastery_pass_mark'] == 75
+
+
+def test_teacher_dashboard_flags_enrolled_student_with_no_activity():
+    lecturer, _ = lecturer_account('Intervention Lecturer')
+    classroom = create_course(lecturer, name='Intervention Course')
+    student = student_account('Inactive Enrolled Student')
+    enrol(student, classroom)
+    dashboard = client.get('/api/dashboard', headers=headers(lecturer))
+    assert dashboard.status_code == 200, dashboard.text
+    intervention = next(item for item in dashboard.json()['interventions'] if item.get('id') == student['user']['id'])
+    assert 'No learning activity recorded' in intervention['reasons']
+    assert intervention['recommended_action']
+
+
+def test_assessment_response_document_extraction_and_private_student_access():
+    student = student_account('Response Extraction Student')
+    extracted = client.post(
+        '/api/assessment/response/extract',
+        headers=headers(student),
+        data={'response_mode': 'upload'},
+        files={'file': ('answer.txt', b'My structured written response with supporting explanation.', 'text/plain')},
+    )
+    assert extracted.status_code == 200, extracted.text
+    assert 'structured written response' in extracted.json()['text']
+    lecturer, _ = lecturer_account('No Extraction Lecturer')
+    forbidden = client.post(
+        '/api/assessment/response/extract',
+        headers=headers(lecturer),
+        data={'response_mode': 'upload'},
+        files={'file': ('answer.txt', b'Lecturer file', 'text/plain')},
+    )
+    assert forbidden.status_code == 403
+
+
+def test_assessment_deadline_and_hidden_hints_are_enforced():
+    lecturer, _ = lecturer_account('Deadline Lecturer')
+    classroom = create_course(lecturer, name='Deadline Course')
+    created = client.post(
+        f"/api/classes/{classroom['id']}/assessments",
+        headers=headers(lecturer),
+        json={
+            'title': 'Closed timed quiz', 'assessment_type': 'quiz', 'topic': 'Topic',
+            'learning_outcome': 'Outcome', 'instructions': 'Answer independently.',
+            'questions': [{
+                'id': 'q1', 'question_type': 'short_answer', 'prompt': 'Explain the concept.',
+                'expected_answer': 'Expected answer', 'marking_guide': 'Marking guide',
+                'hint': 'Private hint', 'explanation': 'Private explanation', 'difficulty': 'standard',
+                'points': 1, 'response_mode': 'typed', 'options': [],
+            }],
+            'settings': {
+                'attempts_allowed': 1, 'hints_allowed': False, 'reveal_answers': True,
+                'pass_mark': 70, 'contributes_to_mastery': True,
+                'integrity_mode': 'exam', 'deadline_enforced': True,
+            },
+            'status': 'published', 'due_at': '2020-01-01T00:00:00+00:00',
+        },
+    )
+    assert created.status_code == 200, created.text
+    student = student_account('Deadline Student')
+    enrol(student, classroom)
+    listed = client.get(f"/api/classes/{classroom['id']}/assessments", headers=headers(student)).json()
+    question = next(item for item in listed if item['id'] == created.json()['id'])['questions'][0]
+    assert 'hint' not in question
+    assert 'expected_answer' not in question
+    assert 'explanation' not in question
+    start = client.post(f"/api/assessments/{created.json()['id']}/start", headers=headers(student))
+    assert start.status_code == 409
+    assert 'deadline' in start.json()['detail'].lower()
+
+
+def test_diagnostic_records_question_level_mastery_for_outcomes_and_topics():
+    lecturer, _ = lecturer_account('Mapped Diagnostic Lecturer')
+    outcomes = ['Explain the core concept', 'Apply the core concept']
+    topics = ['Foundations of the course', 'Practical applications']
+    classroom = create_course(
+        lecturer,
+        name='Mapped Diagnostic Course',
+        weekly_topics=topics,
+        outcomes=outcomes,
+    )
+    student = student_account('Mapped Diagnostic Student')
+    enrol(student, classroom)
+    dashboard = client.get('/api/dashboard', headers=headers(student)).json()
+    diagnostic = next(item for item in dashboard['assessments'] if item['assessment_type'] == 'diagnostic')
+    attempt = client.post(f"/api/assessments/{diagnostic['id']}/start", headers=headers(student)).json()
+    question_map = {
+        question['id']: (question.get('learning_outcome', ''), question.get('topic', ''))
+        for question in attempt['assessment']['questions']
+    }
+    assert any(outcome for outcome, _ in question_map.values())
+    assert any(topic for _, topic in question_map.values())
+    responses = [
+        {
+            'question_id': question['id'],
+            'answer': f"I can explain {question.get('learning_outcome') or question.get('topic')} accurately and give a practical example.",
+            'mode': 'typed',
+        }
+        for question in attempt['assessment']['questions']
+    ]
+    submitted = client.post(
+        f"/api/assessment-attempts/{attempt['attempt_id']}/submit",
+        headers=headers(student),
+        json={'responses': responses, 'hints_used': 0},
+    )
+    assert submitted.status_code == 200, submitted.text
+    mastery = submitted.json()['mastery']
+    assert mastery['assessment_type'] == 'diagnostic'
+    assert mastery['records']
+    recorded_keys = {
+        item.get('learning_outcome') or item.get('topic')
+        for item in mastery['records']
+    }
+    assert set(outcomes + topics).issubset(recorded_keys)
+    path = client.get(f"/api/learning-path/{classroom['id']}", headers=headers(student)).json()
+    assert all(item['status'] != 'not_started' for item in path['items'])
+
+
+def test_mastery_certificate_is_blocked_before_full_mastery():
+    lecturer, _ = lecturer_account('Certificate Lecturer')
+    classroom = create_course(
+        lecturer,
+        name='Certificate Course',
+        weekly_topics=['Topic one'],
+        outcomes=['Master the topic'],
+    )
+    student = student_account('Certificate Student')
+    enrol(student, classroom)
+    certificate = client.get(f"/api/student/certificate/{classroom['id']}", headers=headers(student))
+    assert certificate.status_code == 409
+    assert 'master' in certificate.json()['detail'].lower()
