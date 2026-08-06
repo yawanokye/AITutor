@@ -159,7 +159,7 @@ def test_health_reports_v5_portal_build():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["version"] == "5.4.0"
+    assert data["version"] == "5.5.0"
     assert data["live_video_enabled"] is False
     assert data["institutional_mode"] is True
     assert data["course_lock_enabled"] is True
@@ -184,8 +184,8 @@ def test_index_contains_v5_role_portals_and_two_whiteboards():
         'id="openDashboard"', 'id="classSelect"', 'id="outcomeSelect"', 'id="weekSelect"',
     ):
         assert identifier in html
-    assert '/static/portal.js?v=5.4.0' in html
-    assert '/static/practice_board.js?v=5.4.0' in html
+    assert '/static/portal.js?v=5.5.0' in html
+    assert '/static/practice_board.js?v=5.5.0' in html
     assert 'Administrator sign in' in html
     assert 'Lecturer sign in' in html
     assert 'Student sign in' in html
@@ -423,8 +423,8 @@ def test_index_exposes_pause_control_and_capture_status():
     html = client.get("/").text
     assert 'id="pauseTeaching"' in html
     assert 'id="practiceCaptureStatus"' in html
-    assert '/static/v2_1.js?v=5.4.0' in html
-    assert '/static/practice_board.js?v=5.4.0' in html
+    assert '/static/v2_1.js?v=5.5.0' in html
+    assert '/static/practice_board.js?v=5.5.0' in html
 
 
 
@@ -652,7 +652,7 @@ def test_service_worker_and_manifest_are_v5():
     assert manifest.status_code == 200
     assert worker.status_code == 200
     assert "Anovlad Institutional AI Tutor" in manifest.text
-    assert "anovlad-ai-tutor-v5-4-0-shell" in worker.text
+    assert "anovlad-ai-tutor-v5-5-0-shell" in worker.text
 
 
 def test_cost_aware_router_prefers_flash_for_normal_and_pro_for_advanced():
@@ -695,7 +695,7 @@ def test_v51_student_workspace_controls_are_present():
         'id="practiceFullscreen"', 'id="fullscreenBoard"',
     ):
         assert identifier in html
-    assert '/static/v2_1.js?v=5.4.0' in html
+    assert '/static/v2_1.js?v=5.5.0' in html
     css = client.get('/static/styles.css').text
     assert 'body.student-interface' in css
     assert '.practice-whiteboard-wrap:fullscreen' in css
@@ -931,7 +931,7 @@ def test_frontend_uses_continuous_guided_lecture_audio_and_progressive_popups():
 
 def test_v54_health_and_frontend_expose_complete_learning_cycle():
     health = client.get('/health').json()
-    assert health['version'] == '5.4.0'
+    assert health['version'] == '5.5.0'
     for key in (
         'diagnostic_mastery_engine_enabled', 'personalised_learning_paths_enabled',
         'lecturer_assessment_manager_enabled', 'intelligent_remediation_enabled',
@@ -940,7 +940,7 @@ def test_v54_health_and_frontend_expose_complete_learning_cycle():
     ):
         assert health[key] is True
     html = client.get('/').text
-    assert '/static/portal.js?v=5.4.0' in html
+    assert '/static/portal.js?v=5.5.0' in html
     assert 'data-lesson-followup=' in html
     assert 'id="repeatLastExplanation"' in html
     portal = client.get('/static/portal.js').text
@@ -1211,3 +1211,98 @@ def test_mastery_certificate_is_blocked_before_full_mastery():
     certificate = client.get(f"/api/student/certificate/{classroom['id']}", headers=headers(student))
     assert certificate.status_code == 409
     assert 'master' in certificate.json()['detail'].lower()
+
+
+
+def test_v55_lesson_interruption_and_course_memory_controls_are_exposed():
+    health = client.get('/health').json()
+    assert health['lesson_interruption_resume_enabled'] is True
+    assert health['course_scoped_chat_memory_enabled'] is True
+    assert health['student_memory_controls_enabled'] is True
+    html = client.get('/').text
+    for identifier in (
+        'id="lessonQuestionDialog"', 'id="lessonQuestionText"',
+        'id="continueLessonAfterQuestion"', 'id="learningMemoryDialog"',
+        'id="openLearningMemory"', 'id="clearCurrentCourseMemory"',
+        'id="clearAllCourseMemories"',
+    ):
+        assert identifier in html
+    assert '/static/app.js?v=5.5.0' in html
+    assert '/static/v2_1.js?v=5.5.0' in html
+
+
+def test_visual_cleanup_removes_internal_notes_and_week_numbering():
+    plan = VisualPlan(
+        kind='slides',
+        title='Forecasting lesson',
+        caption='This presentation is linked to the detailed teaching notes. Learn how forecasting supports decisions.',
+        slides=[{
+            'title': 'Week 2: Forecasting',
+            'bullets': ['Week 2: Meaning of forecasting', '1. Strategic importance', 'Forecasting approaches'],
+            'explanation': 'These slides are aligned with the detailed notes. Forecasting estimates future events.',
+            'worked_example': 'Use recent demand to estimate next month.',
+            'key_terms': ['Week 2', '2. Time series', 'Forecast error'],
+            'check_question': 'Why do organisations forecast?',
+            'speaker_note': 'Return to the detailed notes. Explain uncertainty carefully.',
+        }],
+    )
+    cleaned = _normalise_visual_plan(plan, has_image=False)
+    assert 'linked to the detailed' not in cleaned.caption.lower()
+    assert cleaned.slides[0].bullets == ['Meaning of forecasting', 'Strategic importance', 'Forecasting approaches']
+    assert cleaned.slides[0].key_terms == ['Time series', 'Forecast error']
+    assert 'aligned with the detailed' not in cleaned.slides[0].explanation.lower()
+    assert 'return to the detailed' not in cleaned.slides[0].speaker_note.lower()
+    assert 'Explain uncertainty carefully' in cleaned.slides[0].speaker_note
+
+
+def test_lesson_followup_accepts_authoritative_active_week_context_without_visual_replacement():
+    response = client.post(
+        '/api/chat',
+        data={
+            'message': 'Why is this distinction important?',
+            'session_id': f'lesson-followup-{uuid.uuid4()}',
+            'level': 'University',
+            'tutor_mode': 'guided',
+            'course': 'Operations Management',
+            'weekly_topic': 'Week 2: Operations strategy',
+            'visual_requested': 'false',
+            'lesson_context': 'Selected weekly topic: Week 2: Operations strategy\nActive slide: Competitive advantage through operations',
+            'follow_up_during_lesson': 'true',
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()['visual'] is None
+
+
+def test_course_memory_frontend_uses_separate_storage_and_does_not_stop_lesson_for_followup():
+    memory_js = client.get('/static/v2_1.js').text
+    app_js = client.get('/static/app.js').text
+    assert 'anovladAiTutorCourseMemoriesV5_5' in memory_js
+    assert 'aiTutorPauseForLessonQuestion' in memory_js
+    assert 'aiTutorResumeAfterLessonQuestion' in memory_js
+    followup_block = app_js[app_js.index('async function askFollowUp'):app_js.index('async function speakText')]
+    assert 'aiTutorStopTeaching' not in followup_block
+    assert 'openLessonQuestionDialog' in followup_block
+    assert "form.append('lesson_context'" in app_js
+    assert "form.append('follow_up_during_lesson', 'true')" in app_js
+
+
+def test_authenticated_course_chat_memory_can_be_cleared():
+    student = student_account('Memory Student')
+    session_id = f'memory-{uuid.uuid4()}'
+    chatted = client.post(
+        '/api/chat',
+        headers=headers(student),
+        data={
+            'message': 'Explain the role of operations management.',
+            'session_id': session_id,
+            'level': 'University',
+            'course': 'Operations Management',
+            'visual_requested': 'false',
+        },
+    )
+    assert chatted.status_code == 200, chatted.text
+    cleared = client.delete(f'/api/session/{session_id}', headers=headers(student))
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()['cleared'] is True
+    assert cleared.json()['persistent_memory_deleted'] is True
