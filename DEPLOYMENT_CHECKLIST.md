@@ -1,17 +1,19 @@
-# AI Tutor v5.3 Render Deployment Checklist
+# AI Tutor v5.4 Render Deployment Checklist
 
-## A. Before deployment
+## 1. Before deployment
 
 - [ ] Back up the existing Render PostgreSQL database.
-- [ ] Download and extract the v5.3 full package or patch.
-- [ ] Confirm `render.yaml` is at the GitHub repository root.
-- [ ] Upload and replace the existing application files.
-- [ ] Commit the changes to the `main` branch.
-- [ ] Confirm no `.env` file, API key or database password was committed.
+- [ ] Extract the v5.4 full package or upgrade patch.
+- [ ] Upload the contents to the root of the GitHub `AITutor` repository.
+- [ ] Replace existing files and commit to `main`.
+- [ ] Confirm `render.yaml`, `requirements.txt` and the `app` folder are at the repository root.
+- [ ] Confirm no `.env` file or secret was committed.
 
-## B. Required Render environment
+## 2. Existing Render variables
 
-### DeepSeek text tutoring
+Keep the current variables. No new v5.4 variable is required.
+
+### DeepSeek
 
 - [ ] `AI_PROVIDER=deepseek`
 - [ ] `DEEPSEEK_API_KEY` is set.
@@ -19,9 +21,8 @@
 - [ ] `DEEPSEEK_MODEL=deepseek-v4-flash`
 - [ ] `DEEPSEEK_ADVANCED_MODEL=deepseek-v4-pro`
 - [ ] `ADVANCED_ROUTING_ENABLED=true`
-- [ ] `DEEPSEEK_MAX_TOKENS=7000`
 
-### OpenAI image and audio
+### OpenAI vision and audio
 
 - [ ] `OPENAI_API_KEY` is set.
 - [ ] `VISION_MODEL=gpt-5.6-luna`
@@ -29,183 +30,81 @@
 - [ ] `TTS_MODEL=gpt-4o-mini-tts`
 - [ ] `DEFAULT_VOICE=nova`
 
-### Accounts and portals
+### Accounts and institutional controls
 
-- [ ] `AUTH_SECRET` is a long random secret.
-- [ ] `ADMIN_KEY` is a different long random secret.
+- [ ] `DATABASE_URL` is the existing Render Internal Database URL.
+- [ ] `AUTH_SECRET` remains unchanged.
+- [ ] `ADMIN_KEY` is private.
 - [ ] `ALLOW_PUBLIC_TEACHER_REGISTRATION=false`
 - [ ] `ALLOW_STUDENT_REGISTRATION=true`
 - [ ] `REQUIRE_LOGIN_FOR_AI=true`
-- [ ] `DATABASE_URL` contains the existing database's Internal Database URL.
-
-### Institutional controls
-
 - [ ] `INSTITUTIONAL_MODE=true`
 - [ ] `COURSE_LOCK_ENABLED=true`
-- [ ] `ALLOW_GENERAL_KNOWLEDGE=true` if lecturers may enable general mode for selected courses.
 - [ ] `LOW_BANDWIDTH_ENABLED=true`
-- [ ] `MAX_MATERIAL_MB=30`
 - [ ] `LIVE_VIDEO_ENABLED=false`
-- [ ] `LESSON_VIDEO_ENABLED=true`
 - [ ] `DEMO_MODE=false`
 
-## C. Create the first administrator
-
-Choose one method only.
-
-### One-time app bootstrap
-
-- [ ] Keep `ADMIN_EMAIL` and `ADMIN_PASSWORD` blank.
-- [ ] Copy `ADMIN_KEY` from Render.
-- [ ] Open **Sign in or register → First administrator**.
-- [ ] Enter the administrator details and bootstrap key.
-- [ ] Confirm the administrator can sign in.
-
-### Automatic Render provisioning
-
-- [ ] Set `ADMIN_EMAIL`.
-- [ ] Set a strong `ADMIN_PASSWORD`.
-- [ ] Set `ADMIN_DISPLAY_NAME`.
-- [ ] Deploy and confirm the administrator can sign in.
-- [ ] Remove `ADMIN_PASSWORD` from Render after successful setup.
-
-## D. Deploy
+## 3. Deploy
 
 - [ ] Open the `anovlad-ai-tutor` Render web service.
 - [ ] Select **Manual Deploy**.
 - [ ] Select **Clear build cache and deploy**.
-- [ ] Wait for the status to become **Live**.
-- [ ] Open `/health`.
-- [ ] Confirm `version` is `5.3.0`.
-- [ ] Confirm `guided_lecture_notes_enabled=true`.
-- [ ] Confirm `synchronised_slide_popups_enabled=true`.
-- [ ] Confirm `natural_lecture_pacing_enabled=true`.
-- [ ] Refresh the browser with `Ctrl + Shift + R`.
+- [ ] Wait until the service is **Live**.
+- [ ] Open `https://anovlad-ai-tutor.onrender.com/health`.
+- [ ] Confirm `version` is `5.4.0`.
+- [ ] Confirm the diagnostic, pathway, assessment, remediation, revision, notes, integrity and accessibility flags are `true`.
 
-## E. Administrator portal test
+## 4. Browser refresh
 
-- [ ] Sign in as administrator.
-- [ ] Create a test lecturer account.
-- [ ] Copy the generated temporary password.
-- [ ] Sign in as the lecturer.
-- [ ] Change the temporary password.
-- [ ] Test administrator password reset.
-- [ ] Test lecturer deactivation and reactivation.
+- [ ] Sign out of the app.
+- [ ] Press `Ctrl + Shift + R`.
+- [ ] Sign in again.
+- [ ] On a phone, close and reopen the browser tab if the old interface remains.
 
-## F. Lecturer portal test
+## 5. Lecturer checks
 
-- [ ] Create a test course.
-- [ ] Copy the generated enrolment code.
-- [ ] Regenerate the code and confirm the old code is replaced.
-- [ ] Add course objectives.
-- [ ] Add weekly topics.
-- [ ] Add recommended readings.
-- [ ] Add lecturer tutor instructions.
-- [ ] Enable or disable required handwritten practice.
-- [ ] Upload a detailed course outline.
-- [ ] Upload teaching notes.
-- [ ] Upload a recommended reading.
-- [ ] Confirm headings are displayed as sections and subsections.
-- [ ] Confirm extracted objectives and readings appear in the course profile.
+- [ ] Open a course profile.
+- [ ] Confirm Entry diagnostic, Spaced revision, Mastery pass mark and Academic integrity controls are visible.
+- [ ] Save the course profile and reopen it to confirm the values persist.
+- [ ] Open **Assessment and question bank**.
+- [ ] Generate an editable draft.
+- [ ] Edit a question, expected answer and marking guide.
+- [ ] Configure attempts, hints, answer reveal, pass mark and integrity mode.
+- [ ] Publish the assessment.
+- [ ] Confirm Students needing intervention, Common misconceptions and Revision backlog are visible.
 
-## G. Student portal test
+## 6. Student checks
 
-- [ ] Register a student account.
-- [ ] Enrol using the lecturer-generated code.
-- [ ] Open the course.
-- [ ] Expand the detailed outline and teaching notes.
-- [ ] Select a subsection.
-- [ ] Confirm the AI Tutor response cites uploaded course sources.
-- [ ] Confirm detailed slides contain explanations, examples and self-checks.
-- [ ] Test text and audio questions.
-- [ ] Test image and handwriting analysis.
-- [ ] Test the visual explanation whiteboard.
-- [ ] Test the separate practice whiteboard.
-- [ ] Confirm typed-only practice is blocked when handwriting is compulsory.
+- [ ] Open the Student Portal.
+- [ ] Confirm Recommended next appears above the course list.
+- [ ] Start and submit the entry diagnostic.
+- [ ] Confirm the personalised pathway and question-level outcome/topic mastery evidence update.
+- [ ] Complete typed, oral and handwritten guided-practice responses.
+- [ ] Start a published assessment.
+- [ ] Test an oral response and an uploaded written or handwritten response.
+- [ ] Save a private note and bookmark the latest explanation.
+- [ ] Open the printable revision sheet and download the DOCX version.
+- [ ] Confirm Due for review displays scheduled retrieval practice after assessment.
+- [ ] Test Explain more simply, Another example, Show the working, Why is this important and Test me now.
+- [ ] Test Larger text, Reading-friendly font and High contrast.
 
-## H. Document quality test
+## 7. Database checks
 
-- [ ] DOCX files use Heading 1, Heading 2 and Heading 3 styles.
-- [ ] PDF files contain selectable text.
-- [ ] Scanned PDFs have been OCR-processed before upload.
-- [ ] Recommended readings have institutional copyright permission.
-- [ ] Uploaded documents belong to the correct course.
+The following tables are created automatically:
 
-## I. Production readiness
+- `ai_tutor_course_policies`
+- `ai_tutor_assessments`
+- `ai_tutor_assessment_attempts`
+- `ai_tutor_mastery_records`
+- `ai_tutor_revision_items`
+- `ai_tutor_student_notes`
 
-- [ ] Move from Render's free database to a paid, backed-up PostgreSQL plan.
-- [ ] Configure institutional email verification or SSO.
-- [ ] Review rate limits and per-student AI budgets.
-- [ ] Configure monitoring and alerting.
-- [ ] Define lecturer-account approval and offboarding procedures.
-- [ ] Define document copyright and data-retention rules.
-- [ ] Pilot with representative courses before a 30,000-student rollout.
+- [ ] Confirm the service logs show no database migration error.
+- [ ] Do not run a separate SQL migration unless startup reports a database-permission problem.
 
+## 8. Production notes
 
-## Document isolation checks
-
-- [ ] Administrator repository documents are visible only in the Administrator Portal.
-- [ ] Lecturer A cannot see Lecturer B's uploaded documents.
-- [ ] Deleting a lecturer document removes it from both course contents and indexed materials.
-- [ ] A student enrolled in two or more courses sees every enrolled course.
-
-## Effective v5.1.0 document verification
-
-- [ ] Open the Administrator Portal and confirm each private document has a Delete button.
-- [ ] Delete one older administrator upload and confirm the success message reports indexed extracts removed.
-- [ ] Sign in as a lecturer and confirm no administrator-private document appears.
-- [ ] Upload a document to Lecturer A's course and confirm Lecturer B cannot see it.
-- [ ] Delete a lecturer course document and confirm it disappears from both the course tree and course-material list.
-- [ ] Ask a question containing a unique phrase from the deleted document and confirm the source is no longer retrieved.
-- [ ] Confirm `/health` reports version `5.3.0`.
-
-## v5.1 functional verification
-
-- [ ] Student sign-in shows a course-first interface without provider, administrator or lecturer controls.
-- [ ] **My courses** lists every course in which the student is enrolled.
-- [ ] Course outline weeks, activities and subunits are visible and selectable.
-- [ ] Lecturer can choose Student choice, Typed, Recorded voice or Whiteboard for practice responses.
-- [ ] Typed practice response submits successfully.
-- [ ] Voice practice response records, previews, transcribes and submits successfully.
-- [ ] Practice whiteboard accepts handwriting and submits the image for marking.
-- [ ] **Writing space** increases the board height and the board scrolls vertically.
-- [ ] Both teaching and practice whiteboards open full screen.
-- [ ] A course with objectives and outcomes but no reading upload still produces a detailed lesson.
-- [ ] Detailed whiteboard slides show explanations and teaching notes at the same depth as the written lesson.
-
-
-
-## v5.1.1 course-outline restructuring
-
-- [ ] Deploy with **Clear build cache and deploy**.
-- [ ] Confirm `/health` reports `5.3.0` and `period_table_outline_parser_enabled: true`.
-- [ ] Sign out, hard-refresh the browser, and sign in again.
-- [ ] For every outline uploaded before v5.1.1 that shows “Complete document”, ask the lecturer to re-upload the same DOCX once as **Detailed course outline**.
-- [ ] Open the course as a student and confirm the week-by-week cards display topics, subtopics, and preparation activities.
-- [ ] Confirm selecting a subtopic starts the lesson for that exact subtopic.
-
-
-## v5.2 paced teaching and practice-capture verification
-
-- [ ] Confirm `/health` reports `5.3.0`, `cropped_practice_whiteboard_capture_enabled: true`, `partial_practice_credit_enabled: true`, and `paced_section_teaching_enabled: true`.
-- [ ] Start a handwritten practice question, write only part of the answer, and select **Check answer**.
-- [ ] Confirm the interface reports that handwriting was captured and shows a question score rather than completing at 0%.
-- [ ] Confirm a partly correct response remains open for improvement and receives partial activity credit.
-- [ ] During handwritten practice, select the checkmark on the teaching whiteboard and confirm it checks the active practice response rather than the empty teaching board.
-- [ ] Expand the practice board, write near the bottom, and confirm only the written region is submitted clearly.
-- [ ] Start **Teach step by step** and confirm the active title, sentence, equation or worked example is highlighted while it is spoken.
-- [ ] Confirm the tutor finishes the detailed explanation for the active section before moving to the next section.
-- [ ] Test **Pause**, **Resume**, and **Stop** during narration.
-
-
-## E. Guided lecture verification
-
-- [ ] Sign in as a student and open a generated lesson section.
-- [ ] Select **Teach like a lecturer**.
-- [ ] Confirm the detailed notes remain visible while the current sentence is highlighted.
-- [ ] Confirm key ideas, equations, examples and check questions appear progressively.
-- [ ] Confirm one section finishes before the next slide opens.
-- [ ] Test Pause, Resume and Stop.
-- [ ] Confirm the voice sounds continuous rather than restarting after every sentence.
-
-No new environment variable or database migration is required for v5.3.
+- [ ] Keep a paid PostgreSQL plan and regular backups for institutional use.
+- [ ] Pilot diagnostics and mastery thresholds with representative lecturers before applying them widely.
+- [ ] Review AI-generated draft questions before publication.
+- [ ] Treat mastery certificates as learning evidence generated from the app, not as official University awards unless formally approved.

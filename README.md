@@ -1,9 +1,29 @@
-# Anovlad Institutional AI Tutor v5.3.0
+# Anovlad Institutional AI Tutor v5.4.0
 
 A Render-ready, role-based AI learning platform for institutions. Administration, teaching and learning use dedicated portals, while lecturer-approved course documents become a structured, selectable AI tutoring environment.
 
-Version 5.3 retains the course-first student interface, typed, voice and handwritten practice responses, expandable whiteboards, structured course outlines and institutional document controls. It adds a guided lecture mode in which detailed notes are spoken continuously while the matching visual element appears on the whiteboard at the relevant moment.
+Version 5.4 retains the course-first student interface, multimodal practice, structured course outlines, institutional document controls and guided lecture mode. It adds a complete learning cycle covering diagnosis, personalised pathways, lecturer-reviewed assessment, remediation, spaced revision, mastery evidence, student notes and lecturer intervention intelligence.
 
+
+
+## v5.4 complete learning cycle
+
+Version 5.4 connects diagnosis, personalised teaching, multimodal practice, lecturer-reviewed assessment, misconception remediation, spaced revision and mastery tracking. Students receive one recommended next action, private notes and bookmarks, weekly learning goals, accessibility controls and mastery certificates. Lecturers receive an editable question bank and intervention intelligence. Course-level academic-integrity rules govern ordinary tutoring and assessed work.
+
+Key additions:
+
+- Automatic entry diagnostics with question-level outcome and topic mapping, plus personalised learning pathways
+- Outcome mastery records and remedial mini-lessons
+- Spaced revision and review-due queues
+- Lecturer-editable assessments with attempts, hints, deadlines, pass marks and integrity modes
+- Typed, oral, handwritten-image and uploaded-file assessment responses
+- Private notes, bookmarks, printable revision sheets and DOCX export
+- Weekly goals, learning streaks, milestones and course-mastery certificates
+- Lecturer intervention reports for low mastery, misconceptions and inactivity
+- Larger text, high contrast and reading-friendly display controls
+- In-lesson buttons for simpler explanations, another example, worked steps and immediate self-testing
+
+See `V5_4_COMPLETE_LEARNING_CYCLE.md` for the complete feature and migration notes. No new environment variable is required. The existing PostgreSQL database is upgraded automatically at service startup.
 
 
 ## v5.3 guided lecture presentation
@@ -231,7 +251,7 @@ This release uses the existing Render PostgreSQL database. It does not create a 
 6. Add or confirm the environment variables below.
 7. Select **Manual Deploy**, then **Clear build cache and deploy**.
 8. Wait until the service is Live.
-9. Open `/health` and confirm version `5.3.0`.
+9. Open `/health` and confirm version `5.4.0`.
 10. Refresh the browser with `Ctrl + Shift + R`.
 
 Expected health fields include:
@@ -239,7 +259,7 @@ Expected health fields include:
 ```json
 {
   "status": "ok",
-  "version": "5.3.0",
+  "version": "5.4.0",
   "administrator_portal_enabled": true,
   "lecturer_managed_enrolment": true,
   "structured_course_content_enabled": true,
@@ -420,7 +440,7 @@ node --check app/static/practice_board.js
 pytest -q
 ```
 
-The supplied release passes 37 automated tests. External DeepSeek, OpenAI and optional Tavus calls require the institution's own API credentials and should be verified after deployment.
+The supplied release passes 54 automated tests. External DeepSeek, OpenAI and optional Tavus calls require the institution's own API credentials and should be verified after deployment.
 
 ## Security and scale
 
