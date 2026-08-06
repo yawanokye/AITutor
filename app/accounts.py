@@ -608,6 +608,7 @@ class AccountStore:
             "join_code": str(row.get("join_code", "")),
             "student_count": int(row.get("student_count", 0) or 0),
             "teacher_name": str(row.get("teacher_name", "")),
+            "teacher_id": str(row.get("teacher_id", "")),
             "knowledge_mode": str(row.get("knowledge_mode", "course_only") or "course_only"),
             "learning_outcomes": _safe_json(row.get("learning_outcomes"), []),
             "weekly_topics": _safe_json(row.get("weekly_topics"), []),
@@ -981,8 +982,8 @@ class AccountStore:
             SELECT e.*, u.display_name, u.email, c.name AS class_name
             FROM ai_tutor_learning_events e
             JOIN ai_tutor_users u ON u.id=e.user_id
-            JOIN ai_tutor_class_members m ON m.student_id=e.user_id
-            JOIN ai_tutor_classes c ON c.id=m.class_id AND c.teacher_id={placeholder}
+            JOIN ai_tutor_class_members m ON m.student_id=e.user_id AND m.class_id=e.class_id
+            JOIN ai_tutor_classes c ON c.id=e.class_id AND c.teacher_id={placeholder}
             ORDER BY e.created_at DESC LIMIT {limit_placeholder}
             """
             params = (teacher_id, limit)
@@ -1098,6 +1099,32 @@ class AccountStore:
             "popular_questions": popular_questions,
         }
 
+    def _teacher_roster(self, teacher_id: str) -> list[dict[str, Any]]:
+        sql = """
+        SELECT u.id, u.display_name, u.email, c.id AS class_id, c.name AS class_name,
+               MAX(e.created_at) AS last_active, COUNT(e.id) AS activities
+        FROM ai_tutor_classes c
+        JOIN ai_tutor_class_members m ON m.class_id=c.id
+        JOIN ai_tutor_users u ON u.id=m.student_id
+        LEFT JOIN ai_tutor_learning_events e ON e.user_id=u.id AND e.class_id=c.id
+        WHERE c.teacher_id={placeholder}
+        GROUP BY u.id,u.display_name,u.email,c.id,c.name
+        ORDER BY u.display_name,c.name
+        """
+        if self._use_postgres:
+            with self._pg() as conn, conn.cursor() as cur:
+                cur.execute(sql.format(placeholder="%s"), (teacher_id,))
+                rows = [dict(row) for row in cur.fetchall()]
+        else:
+            with self._lock, self._sqlite() as conn:
+                rows = [dict(row) for row in conn.execute(sql.format(placeholder="?"), (teacher_id,)).fetchall()]
+        return [{
+            "id": str(row.get("id", "")), "display_name": str(row.get("display_name", "")),
+            "email": str(row.get("email", "")), "class_id": str(row.get("class_id", "")),
+            "class_name": str(row.get("class_name", "")), "last_active": _iso(row.get("last_active")),
+            "activities": int(row.get("activities", 0) or 0),
+        } for row in rows]
+
     def _student_dashboard(self, user_id: str) -> dict[str, Any]:
         rows = self._event_rows(user_id=user_id, limit=600)
         scored = [float(row["score"]) for row in rows if row.get("score") is not None]
@@ -1111,6 +1138,21 @@ class AccountStore:
         ]
         weak.sort(key=lambda item: item["average_score"])
         insights = self._insights(rows)
+        today = _utcnow().date()
+        activity_dates: set[Any] = set()
+        for row in rows:
+            value = row.get("created_at")
+            try:
+                stamp = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                activity_dates.add(stamp.astimezone(timezone.utc).date())
+            except (TypeError, ValueError):
+                continue
+        weekly_activities = sum(1 for row in rows if _iso(row.get("created_at"))[:10] >= (today - timedelta(days=6)).isoformat())
+        streak = 0
+        cursor = today if today in activity_dates else today - timedelta(days=1)
+        while cursor in activity_dates:
+            streak += 1
+            cursor -= timedelta(days=1)
         return {
             "role": "student",
             "summary": {
@@ -1118,6 +1160,8 @@ class AccountStore:
                 "practice_completed": sum(row.get("event_type") == "practice_completed" for row in rows),
                 "average_score": round(sum(scored) / len(scored), 1) if scored else None,
                 "classes": len(self.classes_for_user(user_id, "student")),
+                "weekly_activities": weekly_activities,
+                "learning_streak_days": streak,
             },
             "classes": self.classes_for_user(user_id, "student"),
             "recent_activity": [self._activity_public(row) for row in rows[:15]],
@@ -1133,6 +1177,15 @@ class AccountStore:
         rows = self._event_rows(teacher_id=teacher_id, limit=2000)
         student_stats: dict[str, dict[str, Any]] = {}
         topic_scores: dict[str, list[float]] = defaultdict(list)
+        roster = self._teacher_roster(teacher_id)
+        for member in roster:
+            uid = str(member.get("id", ""))
+            current = student_stats.setdefault(uid, {
+                "id": uid, "display_name": str(member.get("display_name", "")),
+                "email": str(member.get("email", "")), "activities": 0, "scores": [],
+                "last_active": str(member.get("last_active", "")), "classes": [],
+            })
+            current["classes"].append({"id": member.get("class_id", ""), "name": member.get("class_name", "")})
         for row in rows:
             uid = str(row.get("user_id", ""))
             if uid not in student_stats:
@@ -1160,10 +1213,21 @@ class AccountStore:
             reasons = []
             if stats["average_score"] is not None and stats["average_score"] < 70:
                 reasons.append("Average score below 70%")
-            if stats["activities"] <= 1:
+            if stats["activities"] == 0:
+                reasons.append("No learning activity recorded")
+            elif stats["activities"] <= 1:
                 reasons.append("Very limited learning activity")
+            last_active_text = str(stats.get("last_active") or "")
+            if last_active_text:
+                try:
+                    last_active = datetime.fromisoformat(last_active_text.replace("Z", "+00:00"))
+                    if (_utcnow() - last_active.astimezone(timezone.utc)).days >= 14:
+                        reasons.append("No activity during the past 14 days")
+                except ValueError:
+                    pass
             if reasons:
-                interventions.append({**stats, "reasons": reasons})
+                action = "Contact the student and assign a short diagnostic or remedial activity." if any("No " in reason for reason in reasons) else "Review weak outcomes and assign a remedial mini-lesson followed by reassessment."
+                interventions.append({**stats, "reasons": reasons, "recommended_action": action})
         students.sort(key=lambda item: (item["average_score"] is None, item["average_score"] or 0))
         weak = [
             {"topic": topic, "average_score": round(sum(values) / len(values), 1), "attempts": len(values)}

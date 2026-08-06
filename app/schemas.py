@@ -279,6 +279,13 @@ class ClassCreateRequest(BaseModel):
     tutor_instructions: str = Field(default="", max_length=5000)
     practice_whiteboard_required: bool = False
     practice_response_mode: Literal["student_choice", "typed", "voice", "whiteboard"] = "student_choice"
+    diagnostics_required: bool = True
+    spaced_revision_enabled: bool = True
+    mastery_pass_mark: int = Field(default=70, ge=40, le=95)
+    direct_answers_allowed: bool = True
+    hints_allowed: bool = True
+    assignment_help_mode: Literal["teach_only", "guided", "allowed"] = "guided"
+    integrity_mode: Literal["learning", "hint_only", "assessment_restricted"] = "learning"
 
 
 class ClassProfileUpdateRequest(BaseModel):
@@ -291,6 +298,13 @@ class ClassProfileUpdateRequest(BaseModel):
     tutor_instructions: str = Field(default="", max_length=5000)
     practice_whiteboard_required: bool = False
     practice_response_mode: Literal["student_choice", "typed", "voice", "whiteboard"] = "student_choice"
+    diagnostics_required: bool = True
+    spaced_revision_enabled: bool = True
+    mastery_pass_mark: int = Field(default=70, ge=40, le=95)
+    direct_answers_allowed: bool = True
+    hints_allowed: bool = True
+    assignment_help_mode: Literal["teach_only", "guided", "allowed"] = "guided"
+    integrity_mode: Literal["learning", "hint_only", "assessment_restricted"] = "learning"
 
 
 class ClassJoinRequest(BaseModel):
@@ -304,6 +318,7 @@ class ClassPublic(BaseModel):
     join_code: str = ""
     student_count: int = 0
     teacher_name: str = ""
+    teacher_id: str = ""
     knowledge_mode: Literal["course_only", "course_plus_approved", "general"] = "course_only"
     learning_outcomes: list[str] = Field(default_factory=list)
     weekly_topics: list[str] = Field(default_factory=list)
@@ -311,6 +326,13 @@ class ClassPublic(BaseModel):
     tutor_instructions: str = ""
     practice_whiteboard_required: bool = False
     practice_response_mode: Literal["student_choice", "typed", "voice", "whiteboard"] = "student_choice"
+    diagnostics_required: bool = True
+    spaced_revision_enabled: bool = True
+    mastery_pass_mark: int = 70
+    direct_answers_allowed: bool = True
+    hints_allowed: bool = True
+    assignment_help_mode: Literal["teach_only", "guided", "allowed"] = "guided"
+    integrity_mode: Literal["learning", "hint_only", "assessment_restricted"] = "learning"
     created_at: str = ""
 
 
@@ -329,6 +351,143 @@ class DashboardResponse(BaseModel):
     unanswered_questions: list[dict] = Field(default_factory=list)
     interventions: list[dict] = Field(default_factory=list)
     popular_questions: list[dict] = Field(default_factory=list)
+    learning_paths: list[dict] = Field(default_factory=list)
+    reviews_due: list[dict] = Field(default_factory=list)
+    assessments: list[dict] = Field(default_factory=list)
+    notes: list[dict] = Field(default_factory=list)
+    milestones: dict = Field(default_factory=dict)
+    next_recommended_action: dict = Field(default_factory=dict)
+    mastery_records: list[dict] = Field(default_factory=list)
+    revision_backlog: int = 0
+
+
+class AssessmentQuestion(BaseModel):
+    id: str = Field(default="", max_length=64)
+    question_type: Literal["multiple_choice", "short_answer", "essay", "calculation", "case_study", "oral", "whiteboard", "upload"] = "short_answer"
+    prompt: str = Field(min_length=2, max_length=4000)
+    options: list[str] = Field(default_factory=list, max_length=12)
+    expected_answer: str = Field(default="", max_length=5000)
+    marking_guide: str = Field(default="", max_length=5000)
+    hint: str = Field(default="", max_length=1600)
+    explanation: str = Field(default="", max_length=3000)
+    difficulty: Literal["foundation", "standard", "challenge"] = "standard"
+    points: float = Field(default=1, ge=0.1, le=100)
+    response_mode: Literal["typed", "voice", "whiteboard", "upload", "student_choice"] = "typed"
+    learning_outcome: str = Field(default="", max_length=500)
+    topic: str = Field(default="", max_length=300)
+
+
+class AssessmentSettings(BaseModel):
+    attempts_allowed: int = Field(default=1, ge=1, le=10)
+    hints_allowed: bool = True
+    reveal_answers: bool = True
+    pass_mark: int = Field(default=70, ge=0, le=100)
+    contributes_to_mastery: bool = True
+    integrity_mode: Literal["learning", "hint_only", "graded", "exam"] = "learning"
+    deadline_enforced: bool = False
+
+
+class AssessmentCreateRequest(BaseModel):
+    title: str = Field(min_length=2, max_length=180)
+    assessment_type: Literal["diagnostic", "practice", "quiz", "assignment", "mastery_check"] = "practice"
+    topic: str = Field(default="", max_length=220)
+    learning_outcome: str = Field(default="", max_length=500)
+    instructions: str = Field(default="", max_length=4000)
+    questions: list[AssessmentQuestion] = Field(default_factory=list, max_length=40)
+    settings: AssessmentSettings = Field(default_factory=AssessmentSettings)
+    status: Literal["draft", "published", "closed"] = "draft"
+    due_at: str = Field(default="", max_length=80)
+
+
+class AssessmentDraftRequest(BaseModel):
+    assessment_type: Literal["diagnostic", "practice", "quiz", "assignment", "mastery_check"] = "practice"
+    topic: str = Field(default="", max_length=220)
+    learning_outcome: str = Field(default="", max_length=500)
+    question_count: int = Field(default=5, ge=2, le=20)
+    difficulty: Literal["mixed", "foundation", "standard", "challenge"] = "mixed"
+
+
+class AssessmentPublic(BaseModel):
+    id: str
+    class_id: str
+    teacher_id: str = ""
+    title: str
+    assessment_type: str
+    topic: str = ""
+    learning_outcome: str = ""
+    instructions: str = ""
+    questions: list[dict] = Field(default_factory=list)
+    settings: dict = Field(default_factory=dict)
+    status: str = "draft"
+    due_at: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class AssessmentStartResponse(BaseModel):
+    attempt_id: str
+    assessment: AssessmentPublic
+    attempt_number: int = 1
+    attempts_allowed: int = 1
+
+
+class AssessmentSubmissionRequest(BaseModel):
+    responses: list[dict] = Field(default_factory=list, max_length=40)
+    hints_used: int = Field(default=0, ge=0, le=100)
+
+
+class AssessmentQuestionFeedback(BaseModel):
+    question_id: str = ""
+    score: float = Field(default=0, ge=0, le=100)
+    feedback: str = Field(default="", max_length=1600)
+    misconception: str = Field(default="", max_length=1000)
+    next_step: str = Field(default="", max_length=1000)
+
+
+class AssessmentMarkingResult(BaseModel):
+    overall_score: float = Field(default=0, ge=0, le=100)
+    summary: str = Field(default="", max_length=2500)
+    strengths: list[str] = Field(default_factory=list, max_length=10)
+    misconceptions: list[str] = Field(default_factory=list, max_length=10)
+    question_feedback: list[AssessmentQuestionFeedback] = Field(default_factory=list, max_length=40)
+    recommended_remediation: str = Field(default="", max_length=1800)
+
+
+class AssessmentSubmissionResponse(BaseModel):
+    attempt_id: str
+    score: float
+    passed: bool
+    feedback: dict = Field(default_factory=dict)
+    mastery: dict = Field(default_factory=dict)
+    next_action: dict = Field(default_factory=dict)
+
+
+class StudentNoteRequest(BaseModel):
+    class_id: str = Field(default="", max_length=64)
+    section_id: str = Field(default="", max_length=80)
+    note_type: Literal["note", "bookmark", "worked_example", "revision_flag"] = "note"
+    title: str = Field(default="", max_length=220)
+    content: str = Field(default="", max_length=12000)
+    metadata: dict = Field(default_factory=dict)
+
+
+class RemediationRequest(BaseModel):
+    class_id: str = Field(min_length=1, max_length=64)
+    topic: str = Field(default="", max_length=300)
+    learning_outcome: str = Field(default="", max_length=500)
+    misconception: str = Field(min_length=2, max_length=1600)
+    previous_answer: str = Field(default="", max_length=5000)
+
+
+class RemediationResponse(BaseModel):
+    title: str
+    diagnosis: str
+    prerequisite: str = ""
+    explanation: str
+    worked_example: str = ""
+    retry_question: str
+    sources: list[str] = Field(default_factory=list)
+    visual: VisualPlan | None = None
 
 
 class LiveVideoRequest(BaseModel):

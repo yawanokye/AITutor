@@ -20,7 +20,10 @@ from fastapi.staticfiles import StaticFiles
 
 from starlette.concurrency import run_in_threadpool
 
+from docx import Document
+
 from app.accounts import AccountStore, AuthError, AuthManager
+from app.learning_cycle import LearningCycleStore
 from app.config import settings
 from app.knowledge import KnowledgeStore, extract_text, make_chunks
 from app.course_content import CourseContentStore, DOCUMENT_TYPES
@@ -38,6 +41,13 @@ from app.schemas import (
     AdminCreateLecturerRequest,
     AdminLecturerResponse,
     AdminUserStatusRequest,
+    AssessmentCreateRequest,
+    AssessmentDraftRequest,
+    AssessmentMarkingResult,
+    AssessmentPublic,
+    AssessmentStartResponse,
+    AssessmentSubmissionRequest,
+    AssessmentSubmissionResponse,
     AuthResponse,
     ClassCreateRequest,
     ClassProfileUpdateRequest,
@@ -53,6 +63,8 @@ from app.schemas import (
     PasswordChangeRequest,
     PasswordResetResponse,
     RegisterRequest,
+    RemediationRequest,
+    RemediationResponse,
     SectionLessonPlan,
     SectionTeachRequest,
     SectionTeachResponse,
@@ -66,6 +78,7 @@ from app.schemas import (
     PracticeQuestionResponse,
     PracticeRevealResponse,
     SpeechRequest,
+    StudentNoteRequest,
     VisualPlan,
     WorkCheck,
     WorkCheckResponse,
@@ -79,7 +92,7 @@ logger = logging.getLogger("ai_tutor")
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title=settings.app_name, version="5.3.0")
+app = FastAPI(title=settings.app_name, version="5.4.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -98,6 +111,7 @@ async def prevent_stale_portal_assets(request: Request, call_next):
 knowledge = KnowledgeStore(database_url=settings.database_url, storage_dir=settings.storage_dir)
 accounts = AccountStore(database_url=settings.database_url, storage_dir=settings.storage_dir)
 course_content = CourseContentStore(database_url=settings.database_url, storage_dir=settings.storage_dir)
+learning_cycle = LearningCycleStore(database_url=settings.database_url, storage_dir=settings.storage_dir)
 auth = AuthManager(secret=settings.auth_secret, access_token_minutes=settings.access_token_minutes)
 
 # Optional first administrator provisioned entirely through Render Environment.
@@ -323,9 +337,29 @@ def _course_context(
     for index, result in enumerate(results, start=1):
         label = "COURSE" if result.material_type == "course" else "APPROVED EXTERNAL"
         sections.append(f"{label} EXTRACT {index} [Source: {result.source}]\n{result.content}")
-        if result.source not in sources:
-            sources.append(result.source)
+        source_label = f"Course material: {result.source}" if result.material_type == "course" else f"Approved reading: {result.source}"
+        if source_label not in sources:
+            sources.append(source_label)
     return "\n\n".join(sections), sources
+
+
+def _class_with_policy(row: dict[str, Any]) -> dict[str, Any]:
+    if not row:
+        return row
+    try:
+        return {**row, **learning_cycle.policy(str(row.get("id", "")))}
+    except Exception:
+        logger.exception("Course learning policy could not be loaded")
+        return {
+            **row,
+            "diagnostics_required": True,
+            "spaced_revision_enabled": True,
+            "mastery_pass_mark": 70,
+            "direct_answers_allowed": True,
+            "hints_allowed": True,
+            "assignment_help_mode": "guided",
+            "integrity_mode": "learning",
+        }
 
 
 def _learning_context(
@@ -341,6 +375,7 @@ def _learning_context(
         )
         if not classroom:
             raise HTTPException(status_code=403, detail="You do not have access to this class.")
+        classroom = _class_with_policy(classroom)
     knowledge_mode = str((classroom or {}).get("knowledge_mode") or ("course_only" if settings.course_lock_enabled and class_id else "general"))
     effective_course = str((classroom or {}).get("subject") or (classroom or {}).get("name") or course).strip()[:160]
     outcomes = [str(item) for item in (classroom or {}).get("learning_outcomes", [])]
@@ -359,6 +394,15 @@ def _learning_context(
         "learning_outcome": selected_outcome,
         "weekly_topic": selected_week,
         "tutor_instructions": str((classroom or {}).get("tutor_instructions") or ""),
+        "course_policy": {
+            "diagnostics_required": bool((classroom or {}).get("diagnostics_required", False)),
+            "spaced_revision_enabled": bool((classroom or {}).get("spaced_revision_enabled", True)),
+            "mastery_pass_mark": int((classroom or {}).get("mastery_pass_mark", 70) or 70),
+            "direct_answers_allowed": bool((classroom or {}).get("direct_answers_allowed", True)),
+            "hints_allowed": bool((classroom or {}).get("hints_allowed", True)),
+            "assignment_help_mode": str((classroom or {}).get("assignment_help_mode", "guided")),
+            "integrity_mode": str((classroom or {}).get("integrity_mode", "learning")),
+        },
     }
 
 
@@ -639,6 +683,14 @@ async def health() -> dict[str, Any]:
         "guided_lecture_notes_enabled": True,
         "synchronised_slide_popups_enabled": True,
         "natural_lecture_pacing_enabled": True,
+        "diagnostic_mastery_engine_enabled": True,
+        "personalised_learning_paths_enabled": True,
+        "lecturer_assessment_manager_enabled": True,
+        "intelligent_remediation_enabled": True,
+        "spaced_revision_enabled": True,
+        "student_notes_bookmarks_enabled": True,
+        "academic_integrity_controls_enabled": True,
+        "accessibility_controls_enabled": True,
     }
 
 
@@ -760,6 +812,16 @@ async def chat(
                 logger.exception("Image analysis failed")
                 raise HTTPException(status_code=502, detail=f"Image-analysis error: {type(exc).__name__}") from exc
 
+        policy = learning.get("course_policy") or {}
+        integrity_policy = (
+            "ACADEMIC-INTEGRITY POLICY: "
+            f"mode={policy.get('integrity_mode', 'learning')}; "
+            f"direct answers allowed={bool(policy.get('direct_answers_allowed', True))}; "
+            f"hints allowed={bool(policy.get('hints_allowed', True))}; "
+            f"assignment help={policy.get('assignment_help_mode', 'guided')}. "
+            "When direct answers are disabled, teach the method, ask guiding questions and check the learner's attempt without completing a graded task for them. "
+            "In assessment-restricted mode, do not solve live or graded assessment questions; provide only permitted conceptual guidance."
+        )
         instructions = tutor_instructions(
             app_name=settings.app_name,
             level=level[:80],
@@ -769,7 +831,7 @@ async def chat(
             knowledge_mode=str(learning["knowledge_mode"]),
             learning_outcome=str(learning["learning_outcome"]),
             weekly_topic=str(learning["weekly_topic"]),
-            institutional_instructions=str(learning["tutor_instructions"]),
+            institutional_instructions=(str(learning["tutor_instructions"]) + "\n\n" + integrity_policy).strip(),
             delivery_mode=delivery_mode,
         )
         vision_section = ""
@@ -1258,6 +1320,17 @@ async def check_practice_answer(
                 event_type="practice_attempt", topic=str(state.get("topic") or activity.topic),
                 score=float(evaluation.score), metadata=event_meta
             )
+            if state.get("class_id"):
+                policy = learning_cycle.policy(str(state.get("class_id")))
+                learning_cycle.update_mastery(
+                    student_id=str(user["id"]), class_id=str(state.get("class_id")),
+                    score=float(evaluation.score), outcome=str(state.get("learning_outcome", "")),
+                    topic=str(state.get("weekly_topic") or state.get("topic") or activity.topic),
+                    difficulty=str(question.difficulty), attempts=attempts,
+                    hints_used=1 if (evaluation.next_hint and not evaluation.correct) else 0,
+                    source="guided_practice", misconception=str(evaluation.misconception or ""),
+                    spaced_revision_enabled=bool(policy.get("spaced_revision_enabled", True)),
+                )
             if completed:
                 accounts.record_learning_event(
                     user_id=str(user["id"]), class_id=state.get("class_id") or None,
@@ -1412,6 +1485,15 @@ async def check_whiteboard_work(
                     "step_results": [item.model_dump() for item in result.step_results],
                 }
             )
+            if learning.get("class_id"):
+                policy = learning.get("course_policy") or learning_cycle.policy(str(learning["class_id"]))
+                learning_cycle.update_mastery(
+                    student_id=str(user["id"]), class_id=str(learning["class_id"]), score=float(result.score),
+                    outcome=str(learning["learning_outcome"]), topic=str(learning["weekly_topic"] or course),
+                    difficulty="standard", attempts=1, hints_used=0, source="whiteboard_check",
+                    misconception=(result.corrections[0] if result.corrections else ""),
+                    spaced_revision_enabled=bool(policy.get("spaced_revision_enabled", True)),
+                )
         except Exception:
             logger.exception("Whiteboard progress could not be recorded")
     return WorkCheckResponse(**result.model_dump(), visual=visual)
@@ -1459,6 +1541,70 @@ async def transcribe(request: Request, audio: UploadFile = File(...)) -> dict[st
     _check_rate_limit(request)
     _ai_user(request)
     return {"text": await _transcribe_audio_upload(audio)}
+
+
+
+@app.post("/api/assessment/response/extract")
+async def extract_assessment_response(
+    request: Request,
+    file: UploadFile = File(...),
+    response_mode: str = Form("upload"),
+) -> dict[str, str]:
+    """Convert an oral, handwritten-image or uploaded-document response into markable text."""
+    _check_rate_limit(request)
+    user = _required_user(request)
+    if str(user.get("role")) != "student":
+        raise HTTPException(status_code=403, detail="Assessment response extraction is available to students.")
+    if not file.filename:
+        raise HTTPException(status_code=422, detail="Attach a response file.")
+    content_type = _base_media_type(file.content_type)
+    extension = Path(file.filename).suffix.lower()
+    if content_type.startswith("audio/") or extension in SUPPORTED_AUDIO_EXTENSIONS:
+        return {"text": await _transcribe_audio_upload(file), "mode": "voice"}
+    if content_type in SUPPORTED_IMAGE_TYPES or extension in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+        if settings.demo_mode:
+            await file.read()
+            return {"text": "A handwritten or image-based response was submitted for marking.", "mode": "whiteboard"}
+        image = await _read_image(file, label="Student assessment response")
+        if not image:
+            raise HTTPException(status_code=422, detail="The response image is empty.")
+        try:
+            result = await run_in_threadpool(
+                ai_router.openai_parse_with_images,
+                schema=VisionAnalysis,
+                instructions=(
+                    "Transcribe the learner's handwritten or photographed assessment response faithfully. "
+                    "Preserve equations, calculations, labels and step order. Do not solve, correct or improve the response. "
+                    "Put readable content in visible_text, describe non-text workings in observations, and state uncertainties."
+                ),
+                text="Extract the learner's submitted response so it can be marked against a lecturer rubric.",
+                images=[image],
+                max_tokens=2200,
+            )
+            _record_usage(user, result, "assessment_response_vision")
+            analysis = result.value if isinstance(result.value, VisionAnalysis) else VisionAnalysis.model_validate(result.value)
+            parts = list(analysis.visible_text) + list(analysis.observations)
+            text = "\n".join(part.strip() for part in parts if part.strip()) or analysis.summary.strip()
+            if not text:
+                raise HTTPException(status_code=422, detail="No readable response could be extracted from the image.")
+            return {"text": text[:12000], "mode": "whiteboard"}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("Assessment image extraction failed")
+            raise HTTPException(status_code=502, detail=f"Image-response extraction error: {type(exc).__name__}") from exc
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=422, detail="The uploaded response is empty.")
+    if len(data) > settings.max_material_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"Response files must be no larger than {settings.max_material_mb} MB.")
+    try:
+        text = await run_in_threadpool(extract_text, _safe_filename(file.filename), data)
+    except Exception as exc:
+        raise HTTPException(status_code=415, detail=f"This response file could not be read: {type(exc).__name__}") from exc
+    if not text.strip():
+        raise HTTPException(status_code=422, detail="No readable text was found in the response file.")
+    return {"text": text.strip()[:12000], "mode": response_mode if response_mode in {"upload", "whiteboard"} else "upload"}
 
 
 @app.post("/api/speech")
@@ -1722,7 +1868,7 @@ async def reset_user_password(request: Request, user_id: str) -> PasswordResetRe
 async def list_classes(request: Request) -> list[ClassPublic]:
     user = _required_user(request)
     rows = await run_in_threadpool(accounts.classes_for_user, str(user["id"]), str(user["role"]))
-    return [ClassPublic(**row) for row in rows]
+    return [ClassPublic(**_class_with_policy(row)) for row in rows]
 
 
 @app.post("/api/classes", response_model=ClassPublic)
@@ -1741,7 +1887,18 @@ async def create_class(request: Request, payload: ClassCreateRequest) -> ClassPu
         practice_whiteboard_required=payload.practice_whiteboard_required,
         practice_response_mode=payload.practice_response_mode,
     )
-    return ClassPublic(**row)
+    policy = await run_in_threadpool(learning_cycle.ensure_policy, str(row["id"]), {
+        "diagnostics_required": payload.diagnostics_required,
+        "spaced_revision_enabled": payload.spaced_revision_enabled,
+        "mastery_pass_mark": payload.mastery_pass_mark,
+        "direct_answers_allowed": payload.direct_answers_allowed,
+        "hints_allowed": payload.hints_allowed,
+        "assignment_help_mode": payload.assignment_help_mode,
+        "integrity_mode": payload.integrity_mode,
+    })
+    if payload.diagnostics_required:
+        await run_in_threadpool(_ensure_default_diagnostic, {**row, **policy}, str(user["id"]))
+    return ClassPublic(**{**row, **policy})
 
 
 @app.patch("/api/classes/{class_id}/profile", response_model=ClassPublic)
@@ -1764,7 +1921,18 @@ async def update_class_profile(request: Request, class_id: str, payload: ClassPr
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return ClassPublic(**row)
+    policy = await run_in_threadpool(learning_cycle.ensure_policy, class_id, {
+        "diagnostics_required": payload.diagnostics_required,
+        "spaced_revision_enabled": payload.spaced_revision_enabled,
+        "mastery_pass_mark": payload.mastery_pass_mark,
+        "direct_answers_allowed": payload.direct_answers_allowed,
+        "hints_allowed": payload.hints_allowed,
+        "assignment_help_mode": payload.assignment_help_mode,
+        "integrity_mode": payload.integrity_mode,
+    })
+    if payload.diagnostics_required:
+        await run_in_threadpool(_ensure_default_diagnostic, {**row, **policy}, str(user["id"]))
+    return ClassPublic(**{**row, **policy})
 
 
 @app.post("/api/classes/{class_id}/regenerate-code", response_model=ClassPublic)
@@ -1778,7 +1946,7 @@ async def regenerate_class_code(request: Request, class_id: str) -> ClassPublic:
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return ClassPublic(**row)
+    return ClassPublic(**_class_with_policy(row))
 
 
 @app.post("/api/classes/join", response_model=ClassPublic)
@@ -1794,14 +1962,546 @@ async def join_class(request: Request, payload: ClassJoinRequest) -> ClassPublic
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return ClassPublic(**row)
+    policy = await run_in_threadpool(learning_cycle.policy, str(row["id"]))
+    if policy.get("diagnostics_required") and row.get("teacher_id"):
+        await run_in_threadpool(_ensure_default_diagnostic, {**row, **policy}, str(row.get("teacher_id")))
+    return ClassPublic(**{**row, **policy})
 
 
 @app.get("/api/dashboard", response_model=DashboardResponse)
 async def dashboard(request: Request) -> DashboardResponse:
     user = _required_user(request)
     data = await run_in_threadpool(accounts.dashboard, str(user["id"]), str(user["role"]))
+    role = str(user["role"])
+    if role == "student":
+        classes = [ _class_with_policy(row) for row in data.get("classes", []) ]
+        paths = [await run_in_threadpool(learning_cycle.learning_path, student_id=str(user["id"]), classroom=row) for row in classes]
+        reviews = await run_in_threadpool(learning_cycle.due_revisions, str(user["id"]), include_upcoming=True, limit=30)
+        assessments = []
+        for classroom in classes:
+            assessments.extend(await run_in_threadpool(learning_cycle.list_assessments, str(classroom["id"]), include_drafts=False))
+        notes = await run_in_threadpool(learning_cycle.list_notes, str(user["id"]), None)
+        mastery = await run_in_threadpool(learning_cycle.mastery_for_student, str(user["id"]), None)
+        next_action = next((path.get("next_action") for path in paths if path.get("diagnostic_required")), None)
+        if next_action is None:
+            next_action = next((path.get("next_action") for path in paths if path.get("reviews_due")), None)
+        if next_action is None:
+            next_action = next((path.get("next_action") for path in paths if path.get("next_action")), {})
+        certificate_courses = [
+            {"class_id": path.get("class_id", ""), "course_name": next((row.get("name") for row in classes if row.get("id") == path.get("class_id")), "Course")}
+            for path in paths
+            if int((path.get("milestones") or {}).get("total_items", 0) or 0) > 0
+            and int((path.get("milestones") or {}).get("mastered_outcomes", 0) or 0) == int((path.get("milestones") or {}).get("total_items", 0) or 0)
+            and bool((path.get("milestones") or {}).get("diagnostic_completed", False))
+        ]
+        milestone = {
+            "courses_started": len(classes),
+            "mastered_outcomes": sum(1 for item in mastery if item.get("status") == "mastered"),
+            "competent_or_better": sum(1 for item in mastery if item.get("status") in {"competent", "mastered"}),
+            "notes_saved": len(notes),
+            "weekly_activities": int((data.get("summary") or {}).get("weekly_activities", 0) or 0),
+            "weekly_goal": 3,
+            "learning_streak_days": int((data.get("summary") or {}).get("learning_streak_days", 0) or 0),
+            "certificate_courses": certificate_courses,
+        }
+        data.update({"classes": classes, "learning_paths": paths, "reviews_due": reviews, "assessments": assessments, "notes": notes[:30], "mastery_records": mastery, "next_recommended_action": next_action or {}, "milestones": milestone})
+    elif role == "teacher":
+        classes = [ _class_with_policy(row) for row in data.get("classes", []) ]
+        class_ids = [str(row["id"]) for row in classes]
+        insights = await run_in_threadpool(learning_cycle.teacher_insights, class_ids)
+        assessments = []
+        for class_id in class_ids:
+            assessments.extend(await run_in_threadpool(learning_cycle.list_assessments, class_id, include_drafts=True))
+        data.update({"classes": classes, "assessments": assessments, "mastery_records": insights.get("mastery", []), "revision_backlog": insights.get("revision_backlog", 0)})
+        # Add mastery and inactivity reasons to the existing intervention list.
+        existing = list(data.get("interventions", []))
+        for item in insights.get("weak_mastery", [])[:50]:
+            existing.append({"id": item.get("student_id", ""), "class_id": item.get("class_id", ""), "average_score": item.get("mastery_score", 0), "reasons": [f"Mastery below 60% in {item.get('topic') or item.get('learning_outcome') or 'a course outcome'}"], "recommended_action": "Assign a remedial mini-lesson and a reassessment."})
+        data["interventions"] = existing[:100]
+    else:
+        data["classes"] = [_class_with_policy(row) for row in data.get("classes", [])]
     return DashboardResponse(**data)
+
+
+
+def _default_diagnostic_questions(classroom: dict[str, Any], count: int = 5) -> list[dict[str, Any]]:
+    outcomes = [str(item).strip() for item in classroom.get("learning_outcomes", []) if str(item).strip()]
+    topics = [str(item).strip() for item in classroom.get("weekly_topics", []) if str(item).strip()]
+    anchors = list(dict.fromkeys(outcomes + topics)) or [str(classroom.get("subject") or classroom.get("name") or "the course")]
+    questions: list[dict[str, Any]] = []
+    for index, anchor in enumerate((anchors * count)[:count], start=1):
+        prompt = (
+            f"Briefly explain what you already understand about: {anchor}. "
+            "Give one example or application where possible."
+        )
+        questions.append({
+            "id": f"diagnostic-{index}", "question_type": "short_answer", "prompt": prompt,
+            "options": [], "expected_answer": f"A correct foundational explanation of {anchor}, with a relevant example where appropriate.",
+            "marking_guide": "Award credit for accurate prerequisite knowledge, correct terminology and a relevant example. Use the result to identify gaps rather than punish uncertainty.",
+            "hint": "State the main idea in your own words.",
+            "explanation": f"This diagnostic checks the learner's starting knowledge of {anchor}.",
+            "difficulty": "foundation", "points": 1, "response_mode": "typed",
+            "learning_outcome": anchor if anchor in outcomes else "",
+            "topic": anchor if anchor in topics or anchor not in outcomes else "",
+        })
+    return questions
+
+
+def _ensure_default_diagnostic(classroom: dict[str, Any], teacher_id: str) -> dict[str, Any] | None:
+    class_id = str(classroom.get("id", ""))
+    if not class_id:
+        return None
+    existing = [item for item in learning_cycle.list_assessments(class_id, include_drafts=True) if item.get("assessment_type") == "diagnostic"]
+    if existing:
+        return existing[0]
+    payload = {
+        "title": f"Entry diagnostic: {classroom.get('name') or classroom.get('subject') or 'Course'}",
+        "assessment_type": "diagnostic", "topic": "Course entry knowledge",
+        "learning_outcome": "Establish the learner's starting knowledge and prerequisite gaps.",
+        "instructions": "Answer in your own words. This diagnostic guides your personalised pathway and does not punish incomplete prior knowledge.",
+        "questions": _default_diagnostic_questions(classroom),
+        "settings": {"attempts_allowed": 1, "hints_allowed": False, "reveal_answers": False, "pass_mark": 60, "contributes_to_mastery": True, "integrity_mode": "learning", "deadline_enforced": False},
+        "status": "published", "due_at": "",
+    }
+    return learning_cycle.create_assessment(class_id=class_id, teacher_id=teacher_id, payload=payload)
+
+
+def _assessment_for_student(assessment: dict[str, Any]) -> dict[str, Any]:
+    safe = dict(assessment)
+    settings_data = assessment.get("settings") or {}
+    hints_allowed = bool(settings_data.get("hints_allowed", True))
+    safe_questions = []
+    for question in assessment.get("questions", []):
+        item = dict(question)
+        # Never expose answers or marking guides before submission. The reveal setting
+        # applies to post-submission feedback, not the student question paper.
+        item.pop("marking_guide", None)
+        item.pop("expected_answer", None)
+        item.pop("explanation", None)
+        if not hints_allowed:
+            item.pop("hint", None)
+        safe_questions.append(item)
+    safe["questions"] = safe_questions
+    return safe
+
+
+def _demo_assessment_draft(classroom: dict[str, Any], payload: AssessmentDraftRequest) -> dict[str, Any]:
+    anchor = payload.learning_outcome.strip() or payload.topic.strip() or (classroom.get("learning_outcomes") or classroom.get("weekly_topics") or [classroom.get("subject") or classroom.get("name")])[0]
+    difficulties = [payload.difficulty] * payload.question_count if payload.difficulty != "mixed" else ["foundation", "standard", "challenge"]
+    questions = []
+    for index in range(payload.question_count):
+        difficulty = difficulties[index % len(difficulties)]
+        questions.append({
+            "id": f"draft-{index+1}", "question_type": "short_answer",
+            "prompt": f"Question {index+1}: Explain or apply {anchor} at {difficulty} level.",
+            "options": [], "expected_answer": f"An accurate {difficulty}-level response about {anchor}.",
+            "marking_guide": "Award marks for accuracy, reasoning, application and clear communication.",
+            "hint": "Recall the definition, then connect it to an example.",
+            "explanation": f"A complete answer explains {anchor} and applies it appropriately.",
+            "difficulty": difficulty, "points": 1, "response_mode": "typed",
+            "learning_outcome": payload.learning_outcome or str(anchor),
+            "topic": payload.topic or str(anchor),
+        })
+    return {
+        "title": f"{payload.assessment_type.replace('_', ' ').title()}: {anchor}",
+        "assessment_type": payload.assessment_type, "topic": payload.topic or str(anchor),
+        "learning_outcome": payload.learning_outcome or str(anchor),
+        "instructions": "Read each question carefully and show your reasoning where required.",
+        "questions": questions,
+        "settings": {"attempts_allowed": 2 if payload.assessment_type == "practice" else 1, "hints_allowed": payload.assessment_type in {"diagnostic", "practice"}, "reveal_answers": payload.assessment_type == "practice", "pass_mark": 70, "contributes_to_mastery": True, "integrity_mode": "learning" if payload.assessment_type in {"diagnostic", "practice"} else "graded", "deadline_enforced": False},
+        "status": "draft", "due_at": "",
+    }
+
+
+def _simple_question_score(question: dict[str, Any], response: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+    answer = str(response.get("answer") or response.get("transcript") or response.get("extracted_text") or "").strip()
+    expected = str(question.get("expected_answer") or "").strip()
+    question_type = str(question.get("question_type") or "short_answer")
+    if not answer:
+        return 0.0, {"question_id": str(question.get("id", "")), "score": 0, "feedback": "No response was received.", "misconception": "The response is incomplete.", "next_step": "Provide a response before submitting again."}
+    if question_type == "multiple_choice":
+        correct = answer.casefold() == expected.casefold()
+        return (100.0 if correct else 0.0), {"question_id": str(question.get("id", "")), "score": 100 if correct else 0, "feedback": "Correct choice." if correct else "The selected option is not correct.", "misconception": "" if correct else "Review the defining feature tested by the item.", "next_step": "Continue." if correct else str(question.get("hint") or "Review the relevant concept.")}
+    expected_terms = {word.lower() for word in re.findall(r"[A-Za-z]{4,}", expected) if word.lower() not in {"accurate", "correct", "answer", "response", "explanation", "relevant"}}
+    answer_terms = {word.lower() for word in re.findall(r"[A-Za-z]{4,}", answer)}
+    overlap = len(expected_terms & answer_terms)
+    if overlap >= max(2, min(4, len(expected_terms))):
+        score = 80.0
+    elif overlap >= 1 or len(answer.split()) >= 12:
+        score = 55.0
+    else:
+        score = 30.0
+    return score, {"question_id": str(question.get("id", "")), "score": score, "feedback": "The response shows clear understanding." if score >= 70 else "The response contains useful ideas but needs more accurate explanation or application.", "misconception": "" if score >= 70 else "The main concept or its application is not yet fully explained.", "next_step": "Proceed to the next item." if score >= 70 else str(question.get("hint") or "Review the definition and add a relevant example.")}
+
+
+@app.post("/api/classes/{class_id}/assessments/draft", response_model=AssessmentPublic)
+async def draft_assessment(request: Request, class_id: str, payload: AssessmentDraftRequest) -> AssessmentPublic:
+    user = _required_lecturer(request)
+    classroom = await run_in_threadpool(accounts.class_for_user, class_id=class_id, user_id=str(user["id"]), role="teacher")
+    if not classroom:
+        raise HTTPException(status_code=403, detail="You do not manage this course.")
+    classroom = _class_with_policy(classroom)
+    if settings.demo_mode:
+        draft = _demo_assessment_draft(classroom, payload)
+    else:
+        context, sources = await run_in_threadpool(_course_context, " ".join([payload.topic, payload.learning_outcome, str(classroom.get("subject", ""))]), class_id=class_id, knowledge_mode=str(classroom.get("knowledge_mode", "course_only")))
+        prompt = (
+            f"COURSE\n{classroom.get('name')} ({classroom.get('subject')})\n\nCOURSE OUTCOMES\n" + "\n".join(classroom.get("learning_outcomes", [])) +
+            f"\n\nWEEKLY TOPICS\n" + "\n".join(classroom.get("weekly_topics", [])) +
+            f"\n\nAPPROVED CONTEXT\n{context}\n\nREQUEST\nCreate {payload.question_count} {payload.difficulty} questions for a {payload.assessment_type}. Topic: {payload.topic}. Learning outcome: {payload.learning_outcome}. Include complete marking guides, hints and explanations. For every question, set its own learning_outcome and topic so mastery can be recorded at question level. Vary question types where educationally suitable."
+        )
+        try:
+            result = await run_in_threadpool(ai_router.generate_structured, schema=AssessmentCreateRequest, instructions="You are an experienced lecturer designing a valid, outcome-aligned assessment. Return a lecturer-editable draft. Use British English. Do not claim sources that were not supplied.", prompt=prompt, task="assessment_generation", max_tokens=6500, prefer_deepseek=True)
+            model = result.value if isinstance(result.value, AssessmentCreateRequest) else AssessmentCreateRequest.model_validate(result.value)
+            draft = model.model_dump()
+            draft["status"] = "draft"
+            _record_usage(user, result, "assessment_generation")
+        except Exception as exc:
+            logger.exception("Assessment draft generation failed")
+            raise HTTPException(status_code=502, detail=f"Assessment generation error: {type(exc).__name__}") from exc
+    created = await run_in_threadpool(learning_cycle.create_assessment, class_id=class_id, teacher_id=str(user["id"]), payload=draft)
+    return AssessmentPublic(**created)
+
+
+@app.post("/api/classes/{class_id}/assessments", response_model=AssessmentPublic)
+async def create_assessment(request: Request, class_id: str, payload: AssessmentCreateRequest) -> AssessmentPublic:
+    user = _required_lecturer(request)
+    classroom = await run_in_threadpool(accounts.class_for_user, class_id=class_id, user_id=str(user["id"]), role="teacher")
+    if not classroom:
+        raise HTTPException(status_code=403, detail="You do not manage this course.")
+    created = await run_in_threadpool(learning_cycle.create_assessment, class_id=class_id, teacher_id=str(user["id"]), payload=payload.model_dump())
+    return AssessmentPublic(**created)
+
+
+@app.get("/api/classes/{class_id}/assessments", response_model=list[AssessmentPublic])
+async def list_course_assessments(request: Request, class_id: str) -> list[AssessmentPublic]:
+    user = _required_user(request)
+    classroom = await run_in_threadpool(accounts.class_for_user, class_id=class_id, user_id=str(user["id"]), role=str(user["role"]))
+    if not classroom:
+        raise HTTPException(status_code=403, detail="You do not have access to this course.")
+    include_drafts = str(user["role"]) in {"teacher", "admin"}
+    rows = await run_in_threadpool(learning_cycle.list_assessments, class_id, include_drafts=include_drafts)
+    if str(user["role"]) == "student":
+        rows = [_assessment_for_student(row) for row in rows]
+    return [AssessmentPublic(**row) for row in rows]
+
+
+@app.patch("/api/assessments/{assessment_id}", response_model=AssessmentPublic)
+async def update_assessment(request: Request, assessment_id: str, payload: AssessmentCreateRequest) -> AssessmentPublic:
+    user = _required_lecturer(request)
+    try:
+        row = await run_in_threadpool(learning_cycle.update_assessment, assessment_id, str(user["id"]), payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return AssessmentPublic(**row)
+
+
+@app.delete("/api/assessments/{assessment_id}")
+async def delete_assessment(request: Request, assessment_id: str) -> dict[str, Any]:
+    user = _required_lecturer(request)
+    deleted = await run_in_threadpool(learning_cycle.delete_assessment, assessment_id, str(user["id"]))
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Assessment not found.")
+    return {"deleted": True, "assessment_id": assessment_id}
+
+
+@app.post("/api/assessments/{assessment_id}/start", response_model=AssessmentStartResponse)
+async def start_assessment(request: Request, assessment_id: str) -> AssessmentStartResponse:
+    user = _required_user(request)
+    if str(user["role"]) != "student":
+        raise HTTPException(status_code=403, detail="Only students can start an assessment attempt.")
+    assessment = await run_in_threadpool(learning_cycle.get_assessment, assessment_id)
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assessment not found.")
+    classroom = await run_in_threadpool(accounts.class_for_user, class_id=str(assessment["class_id"]), user_id=str(user["id"]), role="student")
+    if not classroom:
+        raise HTTPException(status_code=403, detail="You are not enrolled in this course.")
+    try:
+        data = await run_in_threadpool(learning_cycle.start_attempt, assessment_id, str(user["id"]))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    data["assessment"] = _assessment_for_student(data["assessment"])
+    return AssessmentStartResponse(**data)
+
+
+@app.post("/api/assessment-attempts/{attempt_id}/submit", response_model=AssessmentSubmissionResponse)
+async def submit_assessment(request: Request, attempt_id: str, payload: AssessmentSubmissionRequest) -> AssessmentSubmissionResponse:
+    user = _required_user(request)
+    if str(user["role"]) != "student":
+        raise HTTPException(status_code=403, detail="Only students can submit assessment responses.")
+    attempts = await run_in_threadpool(learning_cycle.assessment_attempts, student_id=str(user["id"]))
+    attempt = next((item for item in attempts if item.get("id") == attempt_id), None)
+    if not attempt:
+        raise HTTPException(status_code=404, detail="Assessment attempt not found.")
+    if attempt.get("completed"):
+        raise HTTPException(status_code=409, detail="This assessment attempt has already been submitted.")
+    assessment = await run_in_threadpool(learning_cycle.get_assessment, str(attempt["assessment_id"]))
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assessment not found.")
+    questions = list(assessment.get("questions") or [])
+    responses_by_id = {str(item.get("question_id") or item.get("id") or ""): item for item in payload.responses}
+    normalised_responses = []
+    for question in questions:
+        qid = str(question.get("id", ""))
+        response = dict(responses_by_id.get(qid, {}))
+        response["question_id"] = qid
+        normalised_responses.append(response)
+    if settings.demo_mode:
+        feedback_items = []
+        weighted = 0.0
+        points_total = 0.0
+        for question, response in zip(questions, normalised_responses):
+            question_score, feedback = _simple_question_score(question, response)
+            points = float(question.get("points", 1) or 1)
+            weighted += question_score * points
+            points_total += points
+            feedback_items.append(feedback)
+        overall = round(weighted / points_total, 1) if points_total else 0.0
+        marking = AssessmentMarkingResult(overall_score=overall, summary="The diagnostic identifies current strengths and the concepts that should be studied next." if assessment.get("assessment_type") == "diagnostic" else "The assessment has been marked against the lecturer's criteria.", strengths=[item["feedback"] for item in feedback_items if item["score"] >= 70][:5], misconceptions=[item["misconception"] for item in feedback_items if item.get("misconception")][:5], question_feedback=feedback_items, recommended_remediation=next((item["next_step"] for item in feedback_items if item["score"] < 70), "Continue to the next recommended activity."))
+    else:
+        context, sources = await run_in_threadpool(_course_context, f"{assessment.get('topic')} {assessment.get('learning_outcome')}", class_id=str(assessment["class_id"]), knowledge_mode="course_plus_approved")
+        prompt = f"ASSESSMENT\n{json.dumps(assessment, ensure_ascii=False)}\n\nLEARNER RESPONSES\n{json.dumps(normalised_responses, ensure_ascii=False)}\n\nAPPROVED COURSE CONTEXT\n{context}\n\nMark every response against the question's points and marking guide. Diagnose misconceptions, award partial credit, and recommend remediation. Return an overall percentage."
+        try:
+            result = await run_in_threadpool(ai_router.generate_structured, schema=AssessmentMarkingResult, instructions="You are a fair university assessor. Apply the supplied marking guides consistently. Do not reward absent responses. Award partial credit for correct reasoning. Use British English.", prompt=prompt, task="assessment_marking", max_tokens=5500, prefer_deepseek=True)
+            marking = result.value if isinstance(result.value, AssessmentMarkingResult) else AssessmentMarkingResult.model_validate(result.value)
+            _record_usage(user, result, "assessment_marking")
+        except Exception as exc:
+            logger.exception("Assessment marking failed")
+            raise HTTPException(status_code=502, detail=f"Assessment marking error: {type(exc).__name__}") from exc
+    settings_data = assessment.get("settings") or {}
+    pass_mark = int(settings_data.get("pass_mark", 70) or 70)
+    feedback_dict = marking.model_dump()
+    completed = await run_in_threadpool(learning_cycle.complete_attempt, attempt_id=attempt_id, student_id=str(user["id"]), responses=normalised_responses, score=float(marking.overall_score), feedback=feedback_dict)
+    classroom = await run_in_threadpool(accounts.class_for_user, class_id=str(assessment["class_id"]), user_id=str(user["id"]), role="student")
+    policy = _class_with_policy(classroom or {})
+    mastery: dict[str, Any] = {}
+    if bool(settings_data.get("contributes_to_mastery", True)):
+        assessment_type = str(assessment.get("assessment_type", "assessment"))
+        feedback_by_id = {str(item.question_id): item for item in marking.question_feedback}
+        mapped_records: list[dict[str, Any]] = []
+        mapped_keys: set[str] = set()
+        for question in questions:
+            qid = str(question.get("id", ""))
+            outcome = str(question.get("learning_outcome") or "").strip()
+            topic = str(question.get("topic") or "").strip()
+            if not outcome and not topic:
+                continue
+            mastery_key = learning_cycle._key(outcome, topic)
+            if mastery_key in mapped_keys:
+                continue
+            mapped_keys.add(mastery_key)
+            feedback_item = feedback_by_id.get(qid)
+            question_score = float(feedback_item.score if feedback_item else 0)
+            misconception = str(feedback_item.misconception if feedback_item else "")
+            record = await run_in_threadpool(
+                learning_cycle.update_mastery,
+                student_id=str(user["id"]), class_id=str(assessment["class_id"]),
+                score=question_score, outcome=outcome, topic=topic,
+                difficulty=str(question.get("difficulty") or "standard"), attempts=1,
+                hints_used=payload.hints_used, source=f"assessment:{assessment_type}:{qid}",
+                misconception=misconception,
+                spaced_revision_enabled=bool(policy.get("spaced_revision_enabled", True)),
+            )
+            mapped_records.append(record)
+
+        # A diagnostic must seed the path outcome by outcome. Other assessments retain
+        # an overall mastery record, and can add question-level records when mapped.
+        primary: dict[str, Any] = {}
+        if assessment_type != "diagnostic" or not mapped_records:
+            aggregate_outcome = str(assessment.get("learning_outcome", ""))
+            aggregate_topic = str(assessment.get("topic", ""))
+            aggregate_key = learning_cycle._key(aggregate_outcome, aggregate_topic)
+            if aggregate_key not in mapped_keys:
+                primary = await run_in_threadpool(
+                    learning_cycle.update_mastery,
+                    student_id=str(user["id"]), class_id=str(assessment["class_id"]),
+                    score=float(marking.overall_score), outcome=aggregate_outcome, topic=aggregate_topic,
+                    difficulty="standard", attempts=1, hints_used=payload.hints_used,
+                    source=f"assessment:{assessment_type}",
+                    misconception="; ".join(marking.misconceptions[:3]),
+                    spaced_revision_enabled=bool(policy.get("spaced_revision_enabled", True)),
+                )
+        mastery = {"primary": primary, "records": mapped_records, "assessment_type": assessment_type}
+    await run_in_threadpool(accounts.record_learning_event, user_id=str(user["id"]), class_id=str(assessment["class_id"]), event_type="diagnostic_completed" if assessment.get("assessment_type") == "diagnostic" else "assessment_completed", topic=str(assessment.get("topic") or assessment.get("title")), score=float(marking.overall_score), metadata={"assessment_id": assessment["id"], "assessment_type": assessment.get("assessment_type"), "learning_outcome": assessment.get("learning_outcome", ""), "misconception": "; ".join(marking.misconceptions[:3]), "passed": float(marking.overall_score) >= pass_mark})
+    path = await run_in_threadpool(learning_cycle.learning_path, student_id=str(user["id"]), classroom=policy)
+    return AssessmentSubmissionResponse(attempt_id=attempt_id, score=float(completed["score"]), passed=float(completed["score"]) >= pass_mark, feedback=feedback_dict, mastery=mastery, next_action=path.get("next_action", {}))
+
+
+@app.get("/api/learning-path/{class_id}")
+async def student_learning_path(request: Request, class_id: str) -> dict[str, Any]:
+    user = _required_user(request)
+    if str(user["role"]) != "student":
+        raise HTTPException(status_code=403, detail="The personalised learning path is available to students.")
+    classroom = await run_in_threadpool(accounts.class_for_user, class_id=class_id, user_id=str(user["id"]), role="student")
+    if not classroom:
+        raise HTTPException(status_code=403, detail="You are not enrolled in this course.")
+    return await run_in_threadpool(learning_cycle.learning_path, student_id=str(user["id"]), classroom=_class_with_policy(classroom))
+
+
+@app.get("/api/revision/due")
+async def due_revision_items(request: Request, include_upcoming: bool = True, class_id: str = "") -> list[dict[str, Any]]:
+    user = _required_user(request)
+    if str(user["role"]) != "student":
+        return []
+    return await run_in_threadpool(learning_cycle.due_revisions, str(user["id"]), include_upcoming=include_upcoming, limit=50, class_id=class_id or None)
+
+
+@app.post("/api/revision/{revision_id}/complete")
+async def complete_revision_item(request: Request, revision_id: str) -> dict[str, Any]:
+    user = _required_user(request)
+    if str(user["role"]) != "student":
+        raise HTTPException(status_code=403, detail="Only students can complete a revision item.")
+    completed = await run_in_threadpool(learning_cycle.complete_revision, revision_id, str(user["id"]))
+    if not completed:
+        raise HTTPException(status_code=404, detail="Revision item not found.")
+    return {"completed": True, "revision_id": revision_id}
+
+
+
+@app.get("/api/student/certificate/{class_id}", response_class=HTMLResponse)
+async def student_mastery_certificate(request: Request, class_id: str) -> HTMLResponse:
+    user = _required_user(request)
+    if str(user["role"]) != "student":
+        raise HTTPException(status_code=403, detail="Mastery certificates are available to students.")
+    classroom = await run_in_threadpool(accounts.class_for_user, class_id=class_id, user_id=str(user["id"]), role="student")
+    if not classroom:
+        raise HTTPException(status_code=403, detail="You are not enrolled in this course.")
+    classroom = _class_with_policy(classroom)
+    path = await run_in_threadpool(learning_cycle.learning_path, student_id=str(user["id"]), classroom=classroom)
+    milestones = path.get("milestones") or {}
+    total = int(milestones.get("total_items", 0) or 0)
+    mastered = int(milestones.get("mastered_outcomes", 0) or 0)
+    if total <= 0 or mastered < total or not bool(milestones.get("diagnostic_completed", False)):
+        raise HTTPException(status_code=409, detail="Complete the diagnostic and master every configured course outcome before requesting the certificate.")
+    student_name = html.escape(str(user.get("display_name") or user.get("email") or "Student"))
+    course_name = html.escape(str(classroom.get("name") or classroom.get("subject") or "Course"))
+    date_text = _utcnow().strftime("%d %B %Y")
+    page = f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Mastery certificate</title><style>body{{font-family:Georgia,serif;background:#eef5f1;margin:0;padding:35px;color:#17352d}}.certificate{{max-width:900px;margin:auto;background:#fff;border:12px double #1c6b53;padding:65px;text-align:center;box-shadow:0 15px 40px #17352d22}}h1{{font-size:3rem;margin:0;color:#155b47}}h2{{font-size:2rem;margin:24px 0}}p{{font-size:1.2rem;line-height:1.6}}.seal{{font-size:3rem}}button{{padding:10px 18px}}@media print{{body{{background:#fff;padding:0}}button{{display:none}}.certificate{{box-shadow:none}}}}</style></head><body><button onclick='print()'>Print or save as PDF</button><main class='certificate'><div class='seal'>✦</div><h1>Certificate of Course Mastery</h1><p>This certifies that</p><h2>{student_name}</h2><p>has completed the diagnostic learning cycle and demonstrated mastery of all configured outcomes in</p><h2>{course_name}</h2><p>Issued on {date_text}</p><p><small>Generated by {html.escape(settings.app_name)} from recorded mastery evidence.</small></p></main></body></html>"""
+    return HTMLResponse(page, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/student/notes")
+async def list_student_notes(request: Request, class_id: str = "") -> list[dict[str, Any]]:
+    user = _required_user(request)
+    if str(user["role"]) != "student":
+        raise HTTPException(status_code=403, detail="Student notes are private to the student account.")
+    return await run_in_threadpool(learning_cycle.list_notes, str(user["id"]), class_id or None)
+
+
+@app.post("/api/student/notes")
+async def create_student_note(request: Request, payload: StudentNoteRequest) -> dict[str, Any]:
+    user = _required_user(request)
+    if str(user["role"]) != "student":
+        raise HTTPException(status_code=403, detail="Student notes are private to the student account.")
+    if payload.class_id:
+        classroom = await run_in_threadpool(accounts.class_for_user, class_id=payload.class_id, user_id=str(user["id"]), role="student")
+        if not classroom:
+            raise HTTPException(status_code=403, detail="You are not enrolled in this course.")
+    return await run_in_threadpool(learning_cycle.add_note, student_id=str(user["id"]), class_id=payload.class_id, section_id=payload.section_id, note_type=payload.note_type, title=payload.title, content=payload.content, metadata=payload.metadata)
+
+
+@app.delete("/api/student/notes/{note_id}")
+async def delete_student_note(request: Request, note_id: str) -> dict[str, Any]:
+    user = _required_user(request)
+    if str(user["role"]) != "student":
+        raise HTTPException(status_code=403, detail="Student notes are private to the student account.")
+    deleted = await run_in_threadpool(learning_cycle.delete_note, note_id, str(user["id"]))
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Note not found.")
+    return {"deleted": True, "note_id": note_id}
+
+
+@app.get("/api/student/revision-sheet", response_class=HTMLResponse)
+async def student_revision_sheet(request: Request, class_id: str = "") -> HTMLResponse:
+    user = _required_user(request)
+    if str(user["role"]) != "student":
+        raise HTTPException(status_code=403, detail="Revision sheets are available to students.")
+    notes = await run_in_threadpool(learning_cycle.list_notes, str(user["id"]), class_id or None)
+    mastery = await run_in_threadpool(learning_cycle.mastery_for_student, str(user["id"]), class_id or None)
+    due = await run_in_threadpool(learning_cycle.due_revisions, str(user["id"]), include_upcoming=True, limit=50, class_id=class_id or None)
+    weak = [item for item in mastery if item.get("mastery_score", 0) < 70]
+    note_html = "".join(f"<article><h3>{html.escape(item.get('title') or item.get('note_type','Note').title())}</h3><p>{html.escape(item.get('content',''))}</p></article>" for item in notes) or "<p>No personal notes have been saved yet.</p>"
+    weak_html = "".join(f"<li>{html.escape(item.get('topic') or item.get('learning_outcome') or item.get('mastery_key'))}: {item.get('mastery_score',0)}%</li>" for item in weak) or "<li>No weak outcome has been recorded.</li>"
+    due_html = "".join(f"<li>{html.escape(item.get('topic') or item.get('learning_outcome'))} — {html.escape(item.get('due_at','')[:10])}</li>" for item in due) or "<li>No revision is currently due.</li>"
+    page = f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Personal revision sheet</title><style>body{{font-family:Arial,sans-serif;max-width:850px;margin:30px auto;padding:0 22px;line-height:1.55;color:#17352d}}h1,h2{{color:#0b5d4b}}article{{border:1px solid #d8e6e1;border-radius:12px;padding:12px;margin:10px 0}}@media print{{button{{display:none}}}}</style></head><body><button onclick='print()'>Print or save as PDF</button><h1>Personal revision sheet</h1><h2>Topics needing attention</h2><ul>{weak_html}</ul><h2>Review schedule</h2><ul>{due_html}</ul><h2>My notes and bookmarks</h2>{note_html}</body></html>"""
+    return HTMLResponse(page, headers={"Content-Disposition": "inline; filename=ai-tutor-revision-sheet.html", "Cache-Control": "no-store"})
+
+
+
+@app.get("/api/student/revision-sheet.docx")
+async def student_revision_sheet_docx(request: Request, class_id: str = "") -> Response:
+    user = _required_user(request)
+    if str(user["role"]) != "student":
+        raise HTTPException(status_code=403, detail="Revision sheets are available to students.")
+    notes = await run_in_threadpool(learning_cycle.list_notes, str(user["id"]), class_id or None)
+    mastery = await run_in_threadpool(learning_cycle.mastery_for_student, str(user["id"]), class_id or None)
+    due = await run_in_threadpool(learning_cycle.due_revisions, str(user["id"]), include_upcoming=True, limit=50, class_id=class_id or None)
+    document = Document()
+    document.add_heading("Personal Revision Sheet", 0)
+    document.add_paragraph(f"Prepared for {user.get('display_name') or user.get('email') or 'Student'}")
+    document.add_heading("Topics needing attention", level=1)
+    weak = [item for item in mastery if float(item.get("mastery_score", 0) or 0) < 70]
+    if weak:
+        for item in weak:
+            document.add_paragraph(f"{item.get('topic') or item.get('learning_outcome') or item.get('mastery_key')}: {round(float(item.get('mastery_score', 0) or 0))}%", style="List Bullet")
+    else:
+        document.add_paragraph("No weak outcome has been recorded.")
+    document.add_heading("Spaced review schedule", level=1)
+    if due:
+        for item in due:
+            label = item.get("topic") or item.get("learning_outcome") or "Course review"
+            document.add_paragraph(f"{label} — due {str(item.get('due_at', ''))[:10]}", style="List Bullet")
+    else:
+        document.add_paragraph("No revision is currently due.")
+    document.add_heading("My notes and bookmarks", level=1)
+    if notes:
+        for item in notes:
+            document.add_heading(item.get("title") or str(item.get("note_type", "Note")).replace("_", " ").title(), level=2)
+            document.add_paragraph(item.get("content") or "")
+    else:
+        document.add_paragraph("No personal notes have been saved yet.")
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": "attachment; filename=ai-tutor-revision-sheet.docx", "Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/remediation", response_model=RemediationResponse)
+async def generate_remediation(request: Request, payload: RemediationRequest) -> RemediationResponse:
+    _check_rate_limit(request)
+    user = _required_user(request)
+    if str(user["role"]) != "student":
+        raise HTTPException(status_code=403, detail="Remediation is available to students.")
+    classroom = await run_in_threadpool(accounts.class_for_user, class_id=payload.class_id, user_id=str(user["id"]), role="student")
+    if not classroom:
+        raise HTTPException(status_code=403, detail="You are not enrolled in this course.")
+    context, sources = await run_in_threadpool(_course_context, f"{payload.topic} {payload.learning_outcome} {payload.misconception}", class_id=payload.class_id, knowledge_mode=str(classroom.get("knowledge_mode", "course_only")))
+    if settings.demo_mode:
+        title = f"Remedial mini-lesson: {payload.topic or payload.learning_outcome}"
+        diagnosis = f"The current difficulty appears to be: {payload.misconception}"
+        prerequisite = "Review the definition and the relationship between the key terms before applying the method."
+        explanation = "Start with the simplest version of the idea. Identify what is given, state the rule in words, and connect each step to the purpose of the concept."
+        example = "Use a familiar example, explain one step at a time, and check that the result answers the original question."
+        retry = f"Try a new example involving {payload.topic or payload.learning_outcome}, and explain why each step is appropriate."
+        visual = VisualPlan(kind="steps", title=title, steps=[{"title":"Diagnose the gap","explanation":diagnosis,"narration":diagnosis},{"title":"Rebuild the prerequisite","explanation":prerequisite,"narration":prerequisite},{"title":"Apply the idea","explanation":example,"narration":example},{"title":"Try again","explanation":retry,"narration":retry}])
+    else:
+        prompt = f"APPROVED COURSE CONTEXT\n{context}\n\nTOPIC\n{payload.topic}\n\nLEARNING OUTCOME\n{payload.learning_outcome}\n\nMISCONCEPTION\n{payload.misconception}\n\nPREVIOUS ANSWER\n{payload.previous_answer}\n\nCreate a concise remedial mini-lesson that diagnoses the first conceptual gap, teaches the prerequisite simply, provides a different worked example, and ends with a similar retry question."
+        result = await run_in_threadpool(ai_router.generate_text, instructions="You are a patient remedial tutor. Do not merely reveal the original answer. Diagnose the misconception, rebuild the missing prerequisite, use a fresh example and end with a reassessment prompt. Use British English.", prompt=prompt, history=[], task="remediation", max_tokens=3000)
+        _record_usage(user, result, "remediation")
+        text = result.text
+        title = f"Remedial mini-lesson: {payload.topic or payload.learning_outcome}"
+        diagnosis = payload.misconception
+        prerequisite = "Review the prerequisite identified in the explanation below."
+        explanation = text
+        example = "The explanation includes a new illustration based on the approved course context."
+        retry = f"Now try a similar question on {payload.topic or payload.learning_outcome} without looking back at the previous answer."
+        visual = await run_in_threadpool(_create_visual_plan, question=payload.misconception, answer=text, level="University", course=str(classroom.get("subject") or classroom.get("name")), preference="steps", has_image=False, vision_analysis=None, user=user)
+    await run_in_threadpool(accounts.record_learning_event, user_id=str(user["id"]), class_id=payload.class_id, event_type="remediation_started", topic=payload.topic or payload.learning_outcome, metadata={"misconception": payload.misconception, "learning_outcome": payload.learning_outcome})
+    return RemediationResponse(title=title, diagnosis=diagnosis, prerequisite=prerequisite, explanation=explanation, worked_example=example, retry_question=retry, sources=sources, visual=visual)
+
 
 
 @app.post("/api/video/conversation", response_model=LiveVideoResponse)
