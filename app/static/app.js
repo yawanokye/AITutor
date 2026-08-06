@@ -20,7 +20,11 @@ const state = {
   redoStrokes: [],
   currentStroke: null,
   canvasCssWidth: 1,
-  canvasCssHeight: 1
+  canvasCssHeight: 1,
+  lessonQuestionSnapshot: null,
+  lessonQuestionAnswer: '',
+  lessonQuestionAudioUrl: null,
+  activeLessonContext: null
 };
 localStorage.setItem('aiTutorSessionId', state.sessionId);
 
@@ -230,6 +234,7 @@ async function sendQuestion() {
     const data = await apiJson('/api/chat', { method: 'POST', body: form });
     state.sessionId = data.session_id;
     localStorage.setItem('aiTutorSessionId', state.sessionId);
+    window.aiTutorPersistCurrentCourseMemory?.();
     hideTyping();
     addMessage('assistant', data.answer, data.sources || []);
     state.lastAnswer = data.answer;
@@ -256,13 +261,160 @@ async function sendQuestion() {
   }
 }
 
+function activeLessonContext() {
+  const plan = state.visualPlan || {};
+  const classOption = el('classSelect')?.selectedOptions?.[0];
+  const weeklyOption = el('weekSelect')?.selectedOptions?.[0];
+  const outcomeOption = el('outcomeSelect')?.selectedOptions?.[0];
+  const explicit = state.activeLessonContext || {};
+  const lines = [
+    `Course: ${explicit.course_name || classOption?.textContent?.trim() || el('course')?.value?.trim() || 'Independent learning'}`,
+    `Selected weekly topic: ${explicit.weekly_topic || weeklyOption?.textContent?.trim() || 'Not selected'}`,
+    `Selected section path: ${explicit.section_path || 'Not specified'}`,
+    `Selected section: ${explicit.section_title || 'Not specified'}`,
+    `Selected learning outcome: ${outcomeOption?.textContent?.trim() || 'Not selected'}`,
+    `Visual title: ${plan.title || 'Current visual lesson'}`,
+  ];
+  if (plan.kind === 'slides') {
+    const slide = plan.slides?.[state.visualIndex] || {};
+    lines.push(`Active slide: ${slide.title || 'Current topic'}`);
+    lines.push(`Slide position: ${state.visualIndex + 1} of ${Math.max(plan.slides?.length || 1, 1)}`);
+    if (slide.explanation) lines.push(`Detailed explanation: ${slide.explanation}`);
+    if (slide.speaker_note) lines.push(`Lecturer notes: ${slide.speaker_note}`);
+    if ((slide.bullets || []).length) lines.push(`Key ideas: ${(slide.bullets || []).join(' | ')}`);
+    if (slide.equation) lines.push(`Equation: ${slide.equation}`);
+    if (slide.worked_example) lines.push(`Worked example: ${slide.worked_example}`);
+  } else if (plan.kind === 'steps') {
+    const step = plan.steps?.[state.visualIndex] || {};
+    lines.push(`Active step: ${step.title || 'Current step'}`);
+    lines.push(`Step position: ${state.visualIndex + 1} of ${Math.max(plan.steps?.length || 1, 1)}`);
+    if (step.explanation) lines.push(`Explanation: ${step.explanation}`);
+    if (step.narration) lines.push(`Narration: ${step.narration}`);
+    if (step.equation) lines.push(`Equation: ${step.equation}`);
+  }
+  return lines.join('\n').slice(0, 18000);
+}
+
+function lessonQuestionContextLabel() {
+  const plan = state.visualPlan || {};
+  const weekly = el('weekSelect')?.selectedOptions?.[0]?.textContent?.trim();
+  const current = plan.kind === 'slides'
+    ? plan.slides?.[state.visualIndex]?.title
+    : plan.kind === 'steps'
+      ? plan.steps?.[state.visualIndex]?.title
+      : plan.title;
+  const explicit = state.activeLessonContext || {};
+  return [explicit.weekly_topic || weekly, explicit.section_title || current].filter(Boolean).join(' • ') || 'Current lesson point';
+}
+
+function resetLessonQuestionDialog() {
+  el('lessonQuestionStatus').textContent = '';
+  el('lessonQuestionAnswer').classList.add('hidden');
+  el('lessonQuestionAnswer').innerHTML = '';
+  el('readLessonQuestionAnswer').classList.add('hidden');
+  el('lessonQuestionAudio').pause();
+  el('lessonQuestionAudio').classList.add('hidden');
+  el('lessonQuestionAudio').removeAttribute('src');
+  if (state.lessonQuestionAudioUrl) URL.revokeObjectURL(state.lessonQuestionAudioUrl);
+  state.lessonQuestionAudioUrl = null;
+  state.lessonQuestionAnswer = '';
+}
+
+function openLessonQuestionDialog(prompt = '') {
+  resetLessonQuestionDialog();
+  state.lessonQuestionSnapshot = window.aiTutorPauseForLessonQuestion?.() || { wasActive: false, wasPaused: false };
+  el('lessonQuestionContext').innerHTML = `<strong>${escapeHtml(lessonQuestionContextLabel())}</strong><br><span>The presentation is paused at the exact point shown behind this window.</span>`;
+  el('lessonQuestionText').value = String(prompt || '').trim();
+  el('lessonQuestionDialog').showModal();
+  setTimeout(() => el('lessonQuestionText').focus(), 30);
+}
+
+async function playLessonQuestionAnswer() {
+  const text = state.lessonQuestionAnswer.trim();
+  if (!text || !state.config?.openai_enabled) return;
+  const audio = el('lessonQuestionAudio');
+  el('lessonQuestionStatus').textContent = 'Preparing a brief spoken clarification…';
+  try {
+    const response = await fetch('/api/speech', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text.slice(0, 4096), voice: el('voice').value, style: 'guided_lecture', speed: 0.96 })
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.detail || 'Voice generation failed.');
+    }
+    const blob = await response.blob();
+    if (state.lessonQuestionAudioUrl) URL.revokeObjectURL(state.lessonQuestionAudioUrl);
+    state.lessonQuestionAudioUrl = URL.createObjectURL(blob);
+    audio.src = state.lessonQuestionAudioUrl;
+    audio.classList.remove('hidden');
+    el('lessonQuestionStatus').textContent = 'The clarification is being read. The lesson remains paused.';
+    await audio.play();
+  } catch (error) {
+    el('lessonQuestionStatus').textContent = error.message;
+  }
+}
+
+async function submitLessonQuestion() {
+  const text = el('lessonQuestionText').value.trim();
+  if (!text) {
+    el('lessonQuestionStatus').textContent = 'Enter the exact point you want the tutor to explain.';
+    return;
+  }
+  const button = el('submitLessonQuestion');
+  button.disabled = true;
+  el('lessonQuestionStatus').textContent = 'Answering within the current lesson context…';
+  const form = new FormData();
+  form.append('message', text);
+  form.append('session_id', state.sessionId);
+  form.append('level', el('level').value);
+  form.append('tutor_mode', el('tutorMode').value);
+  form.append('course', el('course').value.trim());
+  form.append('class_id', el('classSelect')?.value || '');
+  form.append('learning_outcome', el('outcomeSelect')?.value || '');
+  form.append('weekly_topic', el('weekSelect')?.value || '');
+  form.append('delivery_mode', el('deliveryMode')?.value || 'standard');
+  form.append('visual_requested', 'false');
+  form.append('visual_preference', 'none');
+  form.append('lesson_context', activeLessonContext());
+  form.append('follow_up_during_lesson', 'true');
+  try {
+    const data = await apiJson('/api/chat', { method: 'POST', body: form });
+    state.sessionId = data.session_id;
+    localStorage.setItem('aiTutorSessionId', state.sessionId);
+    state.lessonQuestionAnswer = data.answer;
+    addMessage('user', text);
+    addMessage('assistant', data.answer, data.sources || []);
+    window.aiTutorPersistCurrentCourseMemory?.();
+    const sources = (data.sources || []).length
+      ? `<div class="source-chips">${data.sources.map(source => `<span class="source-chip">${escapeHtml(source)}</span>`).join('')}</div>`
+      : '';
+    el('lessonQuestionAnswer').innerHTML = `${renderMarkdown(data.answer)}${sources}`;
+    el('lessonQuestionAnswer').classList.remove('hidden');
+    el('lessonQuestionStatus').textContent = 'Clarification ready. Continue when the point is clear.';
+    if (state.config?.openai_enabled && el('deliveryMode')?.value !== 'text_only') {
+      el('readLessonQuestionAnswer').classList.remove('hidden');
+      await playLessonQuestionAnswer();
+    }
+  } catch (error) {
+    el('lessonQuestionStatus').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function continueLessonAfterQuestion() {
+  const audio = el('lessonQuestionAudio');
+  audio.pause();
+  el('lessonQuestionDialog').close();
+  window.aiTutorResumeAfterLessonQuestion?.(state.lessonQuestionSnapshot);
+  state.lessonQuestionSnapshot = null;
+  setStatus('Returning to the exact point in the lesson…');
+}
+
 async function askFollowUp(prompt) {
-  window.aiTutorStopTeaching?.();
-  const text = String(prompt || '').trim();
-  if (!text) return;
-  question.value = text;
-  question.focus();
-  await sendQuestion();
+  openLessonQuestionDialog(prompt);
 }
 
 async function speakText(text) {
@@ -505,6 +657,10 @@ function resetVisualBoard() {
 }
 
 async function clearChat() {
+  if (window.aiTutorClearCurrentCourseMemory) {
+    await window.aiTutorClearCurrentCourseMemory({ askConfirmation: false });
+    return;
+  }
   try { await fetch(`/api/session/${encodeURIComponent(state.sessionId)}`, { method: 'DELETE' }); } catch {}
   state.sessionId = crypto.randomUUID();
   localStorage.setItem('aiTutorSessionId', state.sessionId);
@@ -514,7 +670,7 @@ async function clearChat() {
   clearImage();
   removeBoardAttachment();
   resetVisualBoard();
-  setStatus('New conversation started.');
+  setStatus('New course conversation started.');
   setMobileView('chat');
 }
 
@@ -555,7 +711,46 @@ function setVisualImageUrl(url) {
   state.visualImageUrl = url;
 }
 
+function cleanStudentPresentationText(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  const internal = [
+    /\b(?:this|the|these)\s+(?:presentation|slide(?:s| deck)?|visual(?: explanation)?|whiteboard)\s+(?:is|are|has been|have been)\s+(?:linked|aligned|connected|based)\s+(?:to|with|on)\s+(?:the\s+)?detailed\s+(?:note|notes|teaching notes)\b/i,
+    /\b(?:refer|return|go back)\s+to\s+(?:the\s+)?detailed\s+(?:note|notes|teaching notes)\b/i,
+  ];
+  return text.split(/(?<=[.!?])\s+/).filter(sentence => !internal.some(pattern => pattern.test(sentence))).join(' ').trim();
+}
+
+function cleanKeyIdea(value) {
+  const prefix = /^\s*(?:(?:week|period|session|teaching\s+week|slide|section)\s*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s*[:.)\-–—]*\s*|\d+(?:\.\d+)*(?:\s*[:.)\-–—]\s*|\s+))/i;
+  let text = cleanStudentPresentationText(value);
+  let previous = null;
+  while (text && text !== previous) { previous = text; text = text.replace(prefix, '').trim(); }
+  return text;
+}
+
+function sanitisePresentationPlan(plan) {
+  if (!plan || typeof plan !== 'object') return plan;
+  const copy = typeof structuredClone === 'function' ? structuredClone(plan) : JSON.parse(JSON.stringify(plan));
+  copy.title = cleanStudentPresentationText(copy.title);
+  copy.caption = cleanStudentPresentationText(copy.caption);
+  if (copy.kind === 'slides') {
+    copy.slides = (copy.slides || []).map(slide => ({
+      ...slide,
+      title: cleanStudentPresentationText(slide.title),
+      bullets: (slide.bullets || []).map(cleanKeyIdea).filter(Boolean),
+      key_terms: (slide.key_terms || []).map(cleanKeyIdea).filter(Boolean),
+      explanation: cleanStudentPresentationText(slide.explanation),
+      worked_example: cleanStudentPresentationText(slide.worked_example),
+      check_question: cleanStudentPresentationText(slide.check_question),
+      speaker_note: cleanStudentPresentationText(slide.speaker_note),
+    }));
+  }
+  return copy;
+}
+
 function renderVisual(plan, imageUrl = null) {
+  plan = sanitisePresentationPlan(plan);
   state.visualPlan = plan || null;
   state.visualIndex = 0;
   clearInk(false);
@@ -844,7 +1039,7 @@ function renderSlide(plan) {
 
   const bulletCards = (slide.bullets || []).map((item, index) => `
     <article class="lecture-popup lecture-concept-card teaching-section" data-lecture-cue="bullet-${index}" data-teach-section-block="bullet-${index}">
-      <span class="lecture-popup-label">Key idea ${index + 1}</span>
+      <span class="lecture-popup-label">Key idea</span>
       <p>${teachingSentenceMarkup(item, `bullet-${index}`)}</p>
     </article>`).join('');
 
@@ -872,15 +1067,12 @@ function renderSlide(plan) {
       <p>${teachingSentenceMarkup(slide.check_question, 'check-question')}</p>
     </article>` : '';
 
-  const speakerCue = speakerNote && noteBlocks.some(block => block.key === 'speaker-note') ? `
-    <div class="lecture-popup lecture-transition-card teaching-section" data-lecture-cue="speaker-note" aria-hidden="true">
-      <span class="lecture-popup-label">The explanation is continuing</span>
-    </div>` : '';
+  const speakerCue = '';
 
   visualContent.innerHTML = `
     <div class="lesson-slide detailed-slide guided-lecture-slide">
       <header class="lecture-slide-header">
-        <span class="slide-number">Lesson section ${state.visualIndex + 1}</span>
+        <span class="slide-number">Current topic</span>
         <h3 class="teaching-section" data-teach-section-block="title">${escapeHtml(slide.title)}</h3>
       </header>
       <div class="guided-lecture-layout">
@@ -1138,6 +1330,7 @@ el('redoInk').addEventListener('click', redoInk);
 el('clearInk').addEventListener('click', () => clearInk(true));
 el('showChatView').addEventListener('click', () => setMobileView('chat'));
 el('showVisualView').addEventListener('click', () => setMobileView('visual'));
+el('showMemoryView')?.addEventListener('click', () => window.aiTutorOpenMemoryManager?.());
 document.querySelectorAll('.board-tool[data-tool]').forEach(button => button.addEventListener('click', () => setBoardTool(button.dataset.tool)));
 drawingCanvas.addEventListener('pointerdown', startStroke);
 drawingCanvas.addEventListener('pointermove', continueStroke);
@@ -1148,6 +1341,19 @@ document.querySelectorAll('.starter').forEach(button => button.addEventListener(
   question.focus();
 }));
 document.querySelectorAll('[data-lesson-followup]').forEach(button => button.addEventListener('click', () => askFollowUp(button.dataset.lessonFollowup)));
+el('openLessonQuestion')?.addEventListener('click', () => openLessonQuestionDialog(''));
+el('submitLessonQuestion')?.addEventListener('click', submitLessonQuestion);
+el('readLessonQuestionAnswer')?.addEventListener('click', playLessonQuestionAnswer);
+el('continueLessonAfterQuestion')?.addEventListener('click', continueLessonAfterQuestion);
+el('closeLessonQuestion')?.addEventListener('click', continueLessonAfterQuestion);
+el('lessonQuestionText')?.addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitLessonQuestion(); }
+});
+el('lessonQuestionDialog')?.addEventListener('cancel', event => { event.preventDefault(); continueLessonAfterQuestion(); });
+el('lessonQuestionAudio')?.addEventListener('ended', () => {
+  el('lessonQuestionStatus').textContent = 'Clarification complete. Returning to the lesson…';
+  if (state.lessonQuestionSnapshot?.wasActive) setTimeout(continueLessonAfterQuestion, 850);
+});
 el('repeatLastExplanation')?.addEventListener('click', () => state.lastAudioUrl ? audioPlayer.play() : (state.lastAnswer ? speakText(state.lastAnswer) : setStatus('No explanation is available to repeat.')));
 
 const sidebar = el('sidebar');
@@ -1185,6 +1391,8 @@ window.aiTutorSetMobileView = setMobileView;
 window.aiTutorSetStatus = setStatus;
 window.aiTutorVisualPlanToSpeech = visualPlanToSpeech;
 window.aiTutorAskFollowUp = askFollowUp;
+window.aiTutorOpenLessonQuestion = openLessonQuestionDialog;
+window.aiTutorSetActiveLessonContext = context => { state.activeLessonContext = context || null; window.aiTutorPersistCurrentCourseMemory?.(); };
 window.aiTutorLastAnswer = () => state.lastAnswer;
 el('deliveryMode')?.addEventListener('change', event => applyDeliveryMode(event.target.value));
 el('classSelect')?.addEventListener('change', () => { window.aiTutorClassChanged?.(); loadMaterials(); });

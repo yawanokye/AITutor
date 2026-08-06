@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const WORKSPACE_KEY = 'anovladAiTutorWorkspaceV2_1';
+  const COURSE_MEMORY_KEY = 'anovladAiTutorCourseMemoriesV5_5';
   let restoringWorkspace = false;
   let persistTimer = null;
   let diagramDrag = null;
@@ -11,14 +11,32 @@
   let practiceAudioBlob = null;
   let practiceAudioUrl = '';
   let practiceRecordingRunId = 0;
+  let pendingCourseMemory = null;
+  let initialCourseMemoryRestore = true;
 
   Object.assign(state, {
     practice: null,
     teachingActive: false,
     teachingPaused: false,
     teachingRunId: 0,
-    teachingAbortController: null
+    teachingAbortController: null,
+    currentCourseMemoryKey: localStorage.getItem('aiTutorSelectedClass') || 'independent',
+    currentCourseMemoryName: 'Independent learning',
   });
+
+  function readCourseMemories() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(COURSE_MEMORY_KEY) || '{}');
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function writeCourseMemories(memories) {
+    try { localStorage.setItem(COURSE_MEMORY_KEY, JSON.stringify(memories)); }
+    catch (error) { console.warn('Course chat memories could not be saved', error); }
+  }
 
   function debouncePersist() {
     if (restoringWorkspace) return;
@@ -26,36 +44,47 @@
     persistTimer = setTimeout(saveWorkspace, 250);
   }
 
+  function currentCourseName() {
+    const selected = el('classSelect')?.selectedOptions?.[0]?.textContent?.trim();
+    return selected && !/independent learning|select an enrolled course/i.test(selected)
+      ? selected
+      : el('course')?.value?.trim() || 'Independent learning';
+  }
+
+  function workspacePayload() {
+    const visual = state.visualPlan?.kind === 'image_annotation' ? null : state.visualPlan;
+    return {
+      version: '5.5.0',
+      courseKey: state.currentCourseMemoryKey,
+      courseName: state.currentCourseMemoryName || currentCourseName(),
+      sessionId: state.sessionId,
+      chatLog: state.chatLog.slice(-60),
+      lastAnswer: state.lastAnswer,
+      activeLessonContext: state.activeLessonContext || null,
+      visualPlan: visual,
+      visualIndex: state.visualIndex,
+      strokes: state.strokes.slice(-250),
+      settings: {
+        outcomeSelect: el('outcomeSelect')?.value || '',
+        weekSelect: el('weekSelect')?.value || '',
+        deliveryMode: el('deliveryMode')?.value || 'standard',
+        level: el('level').value,
+        tutorMode: el('tutorMode').value,
+        visualPreference: el('visualPreference').value,
+        visualRequested: el('visualRequested').checked,
+        autoSpeak: el('autoSpeak').checked,
+        voice: el('voice').value,
+      },
+      savedAt: new Date().toISOString(),
+    };
+  }
+
   function saveWorkspace() {
-    try {
-      const visual = state.visualPlan?.kind === 'image_annotation' ? null : state.visualPlan;
-      const payload = {
-        version: '5.4.0',
-        sessionId: state.sessionId,
-        chatLog: state.chatLog.slice(-80),
-        lastAnswer: state.lastAnswer,
-        visualPlan: visual,
-        visualIndex: state.visualIndex,
-        strokes: state.strokes.slice(-250),
-        settings: {
-          course: el('course').value,
-          classSelect: el('classSelect')?.value || '',
-          outcomeSelect: el('outcomeSelect')?.value || '',
-          weekSelect: el('weekSelect')?.value || '',
-          deliveryMode: el('deliveryMode')?.value || 'standard',
-          level: el('level').value,
-          tutorMode: el('tutorMode').value,
-          visualPreference: el('visualPreference').value,
-          visualRequested: el('visualRequested').checked,
-          autoSpeak: el('autoSpeak').checked,
-          voice: el('voice').value
-        },
-        savedAt: new Date().toISOString()
-      };
-      localStorage.setItem(WORKSPACE_KEY, JSON.stringify(payload));
-    } catch (error) {
-      console.warn('Workspace could not be saved', error);
-    }
+    if (restoringWorkspace || !state.currentCourseMemoryKey) return;
+    const memories = readCourseMemories();
+    memories[state.currentCourseMemoryKey] = workspacePayload();
+    writeCourseMemories(memories);
+    localStorage.setItem('aiTutorSessionId', state.sessionId);
   }
 
   function restoreSetting(id, value) {
@@ -66,41 +95,51 @@
     else if (!control.options) control.value = value;
   }
 
-  function restoreWorkspace() {
-    const raw = localStorage.getItem(WORKSPACE_KEY);
-    if (!raw) return;
+  function clearWorkspaceDisplay(sessionId = crypto.randomUUID()) {
+    restoringWorkspace = true;
+    state.sessionId = sessionId;
+    localStorage.setItem('aiTutorSessionId', state.sessionId);
+    state.chatLog = [];
+    state.lastAnswer = '';
+    state.activeLessonContext = null;
+    state.visualPlan = null;
+    state.visualIndex = 0;
+    state.strokes = [];
+    state.redoStrokes = [];
+    [...messages.querySelectorAll('.message:not(.welcome-message)')].forEach(node => node.remove());
+    el('replayButton').disabled = true;
+    question.value = '';
+    clearImage();
+    removeBoardAttachment();
+    resetVisualBoard();
+    el('practicePanel')?.classList.add('hidden');
+    state.practice = null;
+    restoringWorkspace = false;
+  }
+
+  function restoreWorkspacePayload(saved) {
+    if (!saved) return;
     try {
-      const saved = JSON.parse(raw);
-      if (!saved || !Array.isArray(saved.chatLog)) return;
       restoringWorkspace = true;
       state.sessionId = saved.sessionId || state.sessionId;
       localStorage.setItem('aiTutorSessionId', state.sessionId);
       state.chatLog = [];
       [...messages.querySelectorAll('.message:not(.welcome-message)')].forEach(node => node.remove());
-      saved.chatLog.forEach(item => addMessage(item.role, item.text, item.sources || []));
+      (saved.chatLog || []).forEach(item => addMessage(item.role, item.text, item.sources || []));
       state.lastAnswer = saved.lastAnswer || '';
+      state.activeLessonContext = saved.activeLessonContext || null;
       el('replayButton').disabled = !state.lastAnswer;
       const settings = saved.settings || {};
-      restoreSetting('course', settings.course);
+      restoreSetting('outcomeSelect', settings.outcomeSelect);
+      restoreSetting('weekSelect', settings.weekSelect);
       restoreSetting('deliveryMode', settings.deliveryMode);
       window.aiTutorApplyDeliveryMode?.(settings.deliveryMode || 'standard');
-      const restoreClassContext = () => {
-        restoreSetting('classSelect', settings.classSelect);
-        window.aiTutorClassChanged?.();
-        setTimeout(() => {
-          restoreSetting('outcomeSelect', settings.outcomeSelect);
-          restoreSetting('weekSelect', settings.weekSelect);
-        }, 120);
-      };
-      setTimeout(restoreClassContext, 600);
-      setTimeout(restoreClassContext, 1400);
       restoreSetting('level', settings.level);
       restoreSetting('tutorMode', settings.tutorMode);
       restoreSetting('visualPreference', settings.visualPreference);
       restoreSetting('visualRequested', settings.visualRequested);
       restoreSetting('autoSpeak', settings.autoSpeak);
-      const applyVoice = () => restoreSetting('voice', settings.voice);
-      setTimeout(applyVoice, 700);
+      restoreSetting('voice', settings.voice);
       if (saved.visualPlan) {
         renderVisual(saved.visualPlan, null);
         state.visualIndex = Math.max(0, Number(saved.visualIndex) || 0);
@@ -108,13 +147,93 @@
         state.strokes = Array.isArray(saved.strokes) ? saved.strokes : [];
         requestAnimationFrame(redrawStrokes);
       }
-      if (saved.chatLog.length) setStatus('Previous learning session restored.');
+      if ((saved.chatLog || []).length) setStatus(`${saved.courseName || 'Course'} conversation restored.`);
+      else setStatus('Course workspace ready.');
     } catch (error) {
-      console.warn('Saved workspace could not be restored', error);
-      localStorage.removeItem(WORKSPACE_KEY);
+      console.warn('Course workspace could not be restored', error);
     } finally {
       restoringWorkspace = false;
     }
+  }
+
+  function beginCourseSwitch(nextKey, nextName = '') {
+    const key = String(nextKey || 'independent');
+    if (!initialCourseMemoryRestore && key === state.currentCourseMemoryKey) {
+      pendingCourseMemory = null;
+      return;
+    }
+    if (!initialCourseMemoryRestore) saveWorkspace();
+    const memories = readCourseMemories();
+    pendingCourseMemory = memories[key] || null;
+    state.currentCourseMemoryKey = key;
+    state.currentCourseMemoryName = String(nextName || pendingCourseMemory?.courseName || (key === 'independent' ? 'Independent learning' : 'Course'));
+    clearWorkspaceDisplay(pendingCourseMemory?.sessionId || crypto.randomUUID());
+  }
+
+  function finishCourseSwitch() {
+    if (pendingCourseMemory) restoreWorkspacePayload(pendingCourseMemory);
+    else setStatus('A separate course conversation is ready.');
+    pendingCourseMemory = null;
+    initialCourseMemoryRestore = false;
+    renderMemoryManager();
+  }
+
+  async function deleteServerSession(sessionId) {
+    if (!sessionId) return;
+    try { await fetch(`/api/session/${encodeURIComponent(sessionId)}`, { method: 'DELETE', cache: 'no-store' }); }
+    catch (error) { console.warn('Server course memory could not be cleared', error); }
+  }
+
+  async function clearCurrentCourseMemory({ askConfirmation = true } = {}) {
+    const name = currentCourseName();
+    if (askConfirmation && !confirm(`Clear the tutor conversation memory for ${name}? Assessment scores, mastery, notes and enrolment will remain.`)) return;
+    const oldSession = state.sessionId;
+    const memories = readCourseMemories();
+    delete memories[state.currentCourseMemoryKey];
+    writeCourseMemories(memories);
+    await deleteServerSession(oldSession);
+    clearWorkspaceDisplay(crypto.randomUUID());
+    setStatus(`A fresh conversation has started for ${name}.`);
+    renderMemoryManager();
+  }
+
+  async function clearAllCourseMemories() {
+    if (!confirm('Clear tutor conversation memory for every course? Assessment scores, mastery, notes and enrolments will remain.')) return;
+    const memories = readCourseMemories();
+    await Promise.all(Object.values(memories).map(memory => deleteServerSession(memory?.sessionId)));
+    localStorage.removeItem(COURSE_MEMORY_KEY);
+    clearWorkspaceDisplay(crypto.randomUUID());
+    setStatus('All course chat memories have been cleared.');
+    renderMemoryManager();
+  }
+
+  function courseNameForMemory(key, memory) {
+    const classroom = window.aiTutorPortalState?.classes?.find(item => item.id === key);
+    return classroom ? `${classroom.name}${classroom.subject ? ` • ${classroom.subject}` : ''}` : memory?.courseName || (key === 'independent' ? 'Independent learning' : 'Course');
+  }
+
+  function renderMemoryManager() {
+    const dialog = el('learningMemoryDialog');
+    if (!dialog) return;
+    const memories = readCourseMemories();
+    const current = memories[state.currentCourseMemoryKey];
+    el('memoryCurrentCourse').innerHTML = `<strong>Current course: ${escapeHtml(currentCourseName())}</strong><br><span>${current?.chatLog?.length || state.chatLog.length || 0} saved message(s) in this course conversation.</span>`;
+    const keys = new Set([
+      ...Object.keys(memories),
+      ...(window.aiTutorPortalState?.classes || []).map(item => item.id),
+    ]);
+    el('memoryCourseList').innerHTML = [...keys].map(key => {
+      const memory = memories[key];
+      const count = memory?.chatLog?.length || 0;
+      const saved = memory?.savedAt ? new Date(memory.savedAt).toLocaleString() : 'No conversation saved';
+      return `<article class="memory-course-item"><div><strong>${escapeHtml(courseNameForMemory(key, memory))}</strong><small>${count} message(s) • ${escapeHtml(saved)}</small></div><span class="role-badge">${key === state.currentCourseMemoryKey ? 'current' : (count ? 'saved' : 'empty')}</span></article>`;
+    }).join('') || '<p class="small-note">No course conversations have been saved yet.</p>';
+  }
+
+  function openMemoryManager() {
+    saveWorkspace();
+    renderMemoryManager();
+    el('learningMemoryDialog')?.showModal();
   }
 
   const originalAddMessage = addMessage;
@@ -574,6 +693,44 @@
     if (el('pauseTeaching')) el('pauseTeaching').textContent = 'Ⅱ Pause';
     el('stopTeaching').classList.add('hidden');
     if (updateStatus) setStatus('Step-by-step teaching stopped.');
+  }
+
+  function pauseForLessonQuestion() {
+    const snapshot = {
+      wasActive: Boolean(state.teachingActive),
+      wasPaused: Boolean(state.teachingPaused),
+      runId: state.teachingRunId,
+      visualIndex: state.visualIndex,
+      audioTime: Number(audioPlayer.currentTime || 0),
+    };
+    if (state.teachingActive) {
+      state.teachingPaused = true;
+      audioPlayer.pause();
+      if (el('pauseTeaching')) el('pauseTeaching').textContent = '▶ Resume';
+      setStatus('Lesson paused for your question.');
+    }
+    return snapshot;
+  }
+
+  function resumeAfterLessonQuestion(snapshot) {
+    if (!snapshot?.wasActive) {
+      setStatus('Clarification complete.');
+      return;
+    }
+    if (!state.teachingActive || snapshot.runId !== state.teachingRunId) {
+      setStatus('The previous lesson run has ended. Select Teach like a lecturer to begin again.');
+      return;
+    }
+    state.visualIndex = snapshot.visualIndex;
+    state.teachingPaused = Boolean(snapshot.wasPaused);
+    if (el('pauseTeaching')) el('pauseTeaching').textContent = state.teachingPaused ? '▶ Resume' : 'Ⅱ Pause';
+    if (!state.teachingPaused && audioPlayer.src && !audioPlayer.ended) {
+      if (Number.isFinite(snapshot.audioTime)) audioPlayer.currentTime = snapshot.audioTime;
+      audioPlayer.play().catch(() => {});
+      setStatus('Lesson resumed from the exact point where you paused.');
+    } else {
+      setStatus('Lesson remains paused at the same point.');
+    }
   }
 
   function annotationClass(item) {
@@ -1187,16 +1344,24 @@
   });
   el('clearChat').addEventListener('click', () => {
     setTimeout(() => {
-      localStorage.removeItem(WORKSPACE_KEY);
       state.practice = null;
       el('practicePanel').classList.add('hidden');
     }, 0);
   });
   window.aiTutorStopTeaching = () => stopStepTeaching(false);
+  window.aiTutorPauseForLessonQuestion = pauseForLessonQuestion;
+  window.aiTutorResumeAfterLessonQuestion = resumeAfterLessonQuestion;
+  window.aiTutorPersistCurrentCourseMemory = saveWorkspace;
+  window.aiTutorBeginCourseSwitch = beginCourseSwitch;
+  window.aiTutorFinishCourseSwitch = finishCourseSwitch;
+  window.aiTutorClearCurrentCourseMemory = clearCurrentCourseMemory;
+  window.aiTutorOpenMemoryManager = openMemoryManager;
   window.addEventListener('beforeunload', saveWorkspace);
+  el('openLearningMemory')?.addEventListener('click', openMemoryManager);
+  el('clearCurrentCourseMemory')?.addEventListener('click', () => clearCurrentCourseMemory({ askConfirmation: true }));
+  el('clearAllCourseMemories')?.addEventListener('click', clearAllCourseMemories);
 
   el('teachVisual').disabled = true;
   el('editVisual').disabled = true;
   el('checkWork').disabled = true;
-  setTimeout(restoreWorkspace, 80);
 })();

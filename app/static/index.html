@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0b5d4b" />
   <link rel="manifest" href="/static/manifest.webmanifest" />
   <title>AI Tutor</title>
-  <link rel="stylesheet" href="/static/styles.css?v=5.4.0" />
+  <link rel="stylesheet" href="/static/styles.css?v=5.5.0" />
   <script>
     window.MathJax = {
       tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
@@ -178,7 +178,8 @@
       <div class="sidebar-actions">
         <button class="secondary" id="exportChat" type="button">Export chat</button>
         <button class="secondary" id="downloadLessonPack" type="button">Save low-data lesson pack</button>
-        <button class="danger-ghost" id="clearChat" type="button">Start new chat</button>
+        <button class="secondary student-memory-action hidden" id="openLearningMemory" type="button">Learning memory</button>
+        <button class="danger-ghost" id="clearChat" type="button">Start new course chat</button>
       </div>
     </aside>
 
@@ -192,6 +193,7 @@
       <nav class="mobile-view-switch" aria-label="Mobile workspace view">
         <button id="showChatView" class="mobile-view-button active" type="button">Conversation</button>
         <button id="showVisualView" class="mobile-view-button" type="button">Whiteboard</button>
+        <button id="showMemoryView" class="mobile-view-button student-memory-action hidden" type="button">Memory</button>
       </nav>
 
       <div class="content-grid" id="contentGrid">
@@ -371,6 +373,7 @@
 
           <div class="lesson-interaction-bar" aria-label="Lesson interaction controls">
             <span>During the lesson</span>
+            <button id="openLessonQuestion" class="lesson-question-primary" type="button">Ask about this point</button>
             <button type="button" data-lesson-followup="Explain the current idea more simply, using everyday language and a familiar example.">Explain more simply</button>
             <button type="button" data-lesson-followup="Give me another example of the current idea, different from the one already used.">Another example</button>
             <button type="button" data-lesson-followup="Show the calculation or procedure for the current idea step by step on the whiteboard.">Show the working</button>
@@ -407,6 +410,45 @@
       </div>
     </main>
   </div>
+
+  <dialog id="lessonQuestionDialog" class="app-dialog lesson-question-dialog">
+    <div class="dialog-card wide">
+      <header><div><span class="eyebrow">Lesson paused at this point</span><h2>Ask about the current explanation</h2></div><button id="closeLessonQuestion" type="button" class="icon-action" aria-label="Continue lesson">×</button></header>
+      <div class="dialog-body">
+        <div id="lessonQuestionContext" class="lesson-question-context"></div>
+        <label>Your exact question or request
+          <textarea id="lessonQuestionText" rows="3" maxlength="3000" placeholder="For example: Explain why this step is necessary, using a different example."></textarea>
+        </label>
+        <div class="lesson-question-actions">
+          <button id="submitLessonQuestion" class="primary" type="button">Ask the tutor</button>
+          <button id="readLessonQuestionAnswer" class="secondary hidden" type="button">🔊 Read answer</button>
+        </div>
+        <div id="lessonQuestionStatus" class="small-status" aria-live="polite"></div>
+        <article id="lessonQuestionAnswer" class="lesson-question-answer hidden" aria-live="polite"></article>
+        <audio id="lessonQuestionAudio" controls class="hidden"></audio>
+      </div>
+      <footer>
+        <span class="small-note">The slide and lecture position are preserved while this question is answered.</span>
+        <button id="continueLessonAfterQuestion" type="button" class="primary">Continue lesson</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <dialog id="learningMemoryDialog" class="app-dialog learning-memory-dialog">
+    <div class="dialog-card wide">
+      <header><div><span class="eyebrow">Course-specific conversations</span><h2>Learning memory</h2></div><button type="button" data-close-dialog="learningMemoryDialog" class="icon-action" aria-label="Close">×</button></header>
+      <div class="dialog-body">
+        <p>Each enrolled course keeps a separate tutor conversation. Clearing chat memory does not remove assessment scores, mastery records, notes or enrolment.</p>
+        <div id="memoryCurrentCourse" class="memory-current-course"></div>
+        <div id="memoryCourseList" class="memory-course-list"></div>
+        <div id="memoryStatus" class="small-status" aria-live="polite"></div>
+      </div>
+      <footer class="memory-footer">
+        <button id="clearAllCourseMemories" type="button" class="danger-ghost">Clear all course chat memories</button>
+        <button id="clearCurrentCourseMemory" type="button" class="primary">Clear current course memory</button>
+      </footer>
+    </div>
+  </dialog>
 
   <dialog id="workCheckDialog" class="app-dialog">
     <form method="dialog" class="dialog-card">
@@ -476,10 +518,10 @@
   </dialog>
 
   <div class="sidebar-backdrop hidden" id="sidebarBackdrop"></div>
-  <script src="/static/portal.js?v=5.4.0"></script>
-  <script src="/static/app.js?v=5.4.0"></script>
-  <script src="/static/v2_1.js?v=5.4.0"></script>
-  <script src="/static/practice_board.js?v=5.4.0"></script>
+  <script src="/static/portal.js?v=5.5.0"></script>
+  <script src="/static/app.js?v=5.5.0"></script>
+  <script src="/static/v2_1.js?v=5.5.0"></script>
+  <script src="/static/practice_board.js?v=5.5.0"></script>
   <script>if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/static/service-worker.js').catch(() => {}));</script>
 </body>
 </html>

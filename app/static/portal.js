@@ -148,6 +148,17 @@
       });
       const add = window.aiTutorAddMessage || window.addMessage;
       const render = window.aiTutorRenderVisual || window.renderVisual;
+      window.aiTutorSetActiveLessonContext?.({
+        class_id: selectedClass()?.id || '',
+        course_name: selectedClass()?.name || selectedClass()?.subject || '',
+        section_id: sectionId,
+        section_title: data.section_title || data.title || '',
+        section_path: data.section_path || '',
+        weekly_topic: (() => {
+          const parts = (data.section_path || '').split(/\s*[>›/]\s*/).filter(Boolean);
+          return parts.find(part => /^(?:week|period|session|teaching\s+week)\b/i.test(part)) || parts[0] || data.section_title || '';
+        })(),
+      });
       add?.('assistant', data.answer, data.sources || []);
       render?.(data.visual, null);
       if ($('practiceTopic')) $('practiceTopic').value = data.section_title || data.title || '';
@@ -182,6 +193,7 @@
 
   function applySelectedClass() {
     const classroom = selectedClass();
+    window.aiTutorBeginCourseSwitch?.(classroom?.id || 'independent', classroom ? `${classroom.name}${classroom.subject ? ` • ${classroom.subject}` : ''}` : 'Independent learning');
     window.aiTutorSelectedClass = classroom;
     const outcome = $('outcomeSelect');
     const week = $('weekSelect');
@@ -195,6 +207,7 @@
       weekLabel.classList.add('hidden');
       loadCourseStructure('');
       window.aiTutorPracticeBoard?.hide();
+      window.aiTutorFinishCourseSwitch?.();
       return;
     }
     $('course').value = classroom.subject || classroom.name;
@@ -207,6 +220,7 @@
     weekLabel.classList.toggle('hidden', !weeks.length);
     localStorage.setItem(CLASS_KEY, classroom.id);
     loadCourseStructure(classroom.id);
+    window.aiTutorFinishCourseSwitch?.();
   }
   window.aiTutorClassChanged = applySelectedClass;
 
@@ -257,6 +271,7 @@
     document.body.classList.toggle('student-interface', role === 'student');
     document.body.classList.toggle('lecturer-interface', role === 'teacher');
     document.body.classList.toggle('admin-interface', role === 'admin');
+    document.querySelectorAll('.student-memory-action').forEach(node => node.classList.toggle('hidden', role !== 'student'));
     const lecturer = signedIn && state.user.role === 'teacher';
     if ($('openDashboard') && role === 'student') $('openDashboard').textContent = 'My courses';
     if ($('courseSettingsTitle')) $('courseSettingsTitle').textContent = role === 'student' ? 'Current course' : 'Learning settings';

@@ -1004,3 +1004,57 @@ body.high-contrast .panel, body.high-contrast .dashboard-section, body.high-cont
 .weekly-goal-card > div:first-child { display:flex; justify-content:space-between; gap:10px; }
 .certificate-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
 .assessment-multimodal-response { display:grid; gap:9px; margin-top:10px; }
+
+/* v5.5 lesson continuity and course-scoped chat memory */
+.lesson-question-dialog .dialog-card { max-width: 900px; }
+.lesson-question-context {
+  padding: .85rem 1rem;
+  margin-bottom: 1rem;
+  border-radius: 14px;
+  background: #eef7f4;
+  border: 1px solid rgba(11, 93, 75, .18);
+  color: #23483e;
+  line-height: 1.5;
+}
+.lesson-question-actions { display: flex; gap: .7rem; flex-wrap: wrap; margin-top: .8rem; }
+.lesson-question-answer {
+  margin-top: 1rem;
+  padding: 1rem 1.1rem;
+  border-radius: 16px;
+  background: #fff;
+  border: 1px solid rgba(32, 91, 75, .18);
+  box-shadow: 0 10px 26px rgba(20, 65, 53, .08);
+  line-height: 1.68;
+  max-height: min(45vh, 520px);
+  overflow-y: auto;
+}
+.lesson-question-answer .source-chips { margin-top: .8rem; }
+.lesson-question-dialog footer { align-items: center; justify-content: space-between; gap: 1rem; }
+.lesson-question-primary { background: #173f35 !important; color: #fff !important; }
+.memory-current-course {
+  padding: 1rem;
+  border-radius: 15px;
+  background: #eef7f4;
+  border: 1px solid rgba(11, 93, 75, .18);
+  margin-bottom: 1rem;
+}
+.memory-course-list { display: grid; gap: .65rem; }
+.memory-course-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: .8rem .9rem;
+  border: 1px solid rgba(32, 91, 75, .14);
+  border-radius: 13px;
+  background: #fff;
+}
+.memory-course-item small { display: block; color: var(--muted); margin-top: .2rem; }
+.memory-footer { justify-content: space-between; flex-wrap: wrap; }
+body:not(.student-interface) .student-memory-action { display: none !important; }
+.lecture-popup-label { letter-spacing: .025em; }
+@media (max-width: 680px) {
+  .lesson-question-dialog footer, .memory-footer { align-items: stretch; }
+  .lesson-question-dialog footer button, .memory-footer button { width: 100%; }
+  .memory-course-item { align-items: flex-start; flex-direction: column; }
+}

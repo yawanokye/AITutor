@@ -1,4 +1,4 @@
-const CACHE_NAME = "anovlad-ai-tutor-v5-4-0-shell";
+const CACHE_NAME = "anovlad-ai-tutor-v5-5-0-shell";
 const SHELL = [
   "/",
   "/static/styles.css",
